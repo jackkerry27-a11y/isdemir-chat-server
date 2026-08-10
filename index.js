@@ -14,6 +14,14 @@ const io = new Server(server, {
 // Map yapısı: { userId: { socketId, isOnline, lastSeen, profileData } }
 const connectedUsers = new Map();
 
+// Zorunlu Güncelleme (Force Update) için API
+app.get('/version', (req, res) => {
+  res.json({
+    latestVersion: 1, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
+    downloadUrl: "https://google.com" // Şimdilik test amaçlı google'a yönlendirir, buraya APK indirme linki konacak
+  });
+});
+
 io.on('connection', (socket) => {
   console.log(`Yeni bir bağlantı: ${socket.id}`);
 
