@@ -18,7 +18,7 @@ const connectedUsers = new Map();
 app.get('/version', (req, res) => {
   res.json({
     latestVersion: 2, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
-    downloadUrl: "https://github.com/jackiemmy27-ally/isdemir-chat-server/releases/download/v2.0/app-release.apk" // GitHub Direct Download Link
+    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v2.0/app-release.apk" // GitHub Direct Download Link
   });
 });
 
