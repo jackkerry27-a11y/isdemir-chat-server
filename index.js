@@ -17,8 +17,8 @@ const connectedUsers = new Map();
 // Zorunlu Güncelleme (Force Update) için API
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 1, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
-    downloadUrl: "https://google.com" // Şimdilik test amaçlı google'a yönlendirir, buraya APK indirme linki konacak
+    latestVersion: 2, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
+    downloadUrl: "https://drive.google.com/uc?export=download&id=1gP83_gErblarwNUSYX3_5h2yflmvcoLi" // Google Drive direct download link
   });
 });
 
