@@ -18,7 +18,7 @@ const connectedUsers = new Map();
 app.get('/version', (req, res) => {
   res.json({
     latestVersion: 2, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
-    downloadUrl: "https://drive.google.com/uc?export=download&id=1gP83_gErblarwNUSYX3_5h2yflmvcoLi" // Google Drive direct download link
+    downloadUrl: "https://github.com/jackiemmy27-ally/isdemir-chat-server/releases/download/v2.0/app-release.apk" // GitHub Direct Download Link
   });
 });
 
