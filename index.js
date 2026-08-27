@@ -17,8 +17,8 @@ const connectedUsers = new Map();
 // Zorunlu Güncelleme (Force Update) için API
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 3, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
-    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v3.0/app-release.apk" // GitHub Direct Download Link
+    latestVersion: 4, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
+    downloadUrl: "https://mirror.ghproxy.com/https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v4.0/app-release.apk" // CDN Hızlandırılmış Link
   });
 });
 
