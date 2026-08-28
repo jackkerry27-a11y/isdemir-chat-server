@@ -391,24 +391,24 @@ class _GemilerScreenState extends State<GemilerScreen> {
   Widget _buildVesselCard(ShipData ship, NumberFormat fNumber) {
     final isTahliye = ship.islem == 'Tahliye';
 
-    // Sol taraftaki fotoğraf seçimi
-    String assetImage = 'assets/images/vessel_tanker.jpg';
+    // Sol taraftaki fotoğraf ve rozet seçimi
+    String networkImageUrl = 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?q=80&w=400&auto=format&fit=crop';
     Color glowDotColor = const Color(0xFF10B981);
 
     if (ship.gemiAdi.contains('CHEMICAL EXPLORER')) {
-      assetImage = 'assets/images/vessel_tanker.jpg';
+      networkImageUrl = 'https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?q=80&w=400&auto=format&fit=crop';
       glowDotColor = const Color(0xFF10B981);
     } else if (ship.gemiAdi.contains('IONIC SPIRIT')) {
-      assetImage = 'assets/images/vessel_bulk.jpg';
+      networkImageUrl = 'https://images.unsplash.com/photo-1559136555-9303baea8ebd?q=80&w=400&auto=format&fit=crop';
       glowDotColor = const Color(0xFFF59E0B);
     } else if (ship.gemiAdi.contains('GALA A')) {
-      assetImage = 'assets/images/vessel_cargo.jpg';
+      networkImageUrl = 'https://images.unsplash.com/photo-1518241353330-0f7941c2d9b5?q=80&w=400&auto=format&fit=crop';
       glowDotColor = const Color(0xFF00E5FF);
     } else if (ship.gemiAdi.contains('GOLDEN SHARK')) {
-      assetImage = 'assets/images/vessel_bulk.jpg';
+      networkImageUrl = 'https://images.unsplash.com/photo-1559136555-9303baea8ebd?q=80&w=400&auto=format&fit=crop';
       glowDotColor = const Color(0xFFEAB308);
     } else {
-      assetImage = 'assets/images/vessel_cargo.jpg';
+      networkImageUrl = 'https://images.unsplash.com/photo-1518241353330-0f7941c2d9b5?q=80&w=400&auto=format&fit=crop';
       glowDotColor = const Color(0xFF10B981);
     }
 
@@ -440,12 +440,31 @@ class _GemilerScreenState extends State<GemilerScreen> {
                   child: Stack(
                     fit: StackFit.expand,
                     children: [
-                      Image.asset(
-                        assetImage,
+                      Image.network(
+                        networkImageUrl,
                         fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) {
+                        loadingBuilder: (context, child, progress) {
+                          if (progress == null) return child;
                           return Container(
                             color: const Color(0xFF0F1E36),
+                            child: const Center(
+                              child: SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF00E5FF)),
+                              ),
+                            ),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          return Container(
+                            decoration: const BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                                colors: [Color(0xFF0F2642), Color(0xFF071424)],
+                              ),
+                            ),
                             child: const Center(
                               child: Icon(Icons.directions_boat_rounded, color: Color(0xFF00E5FF), size: 36),
                             ),

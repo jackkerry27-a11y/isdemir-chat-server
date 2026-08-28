@@ -100,12 +100,31 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   }
 
   Future<void> _routeToNextScreen() async {
-    await Future.delayed(const Duration(milliseconds: 2800));
-    await _checkForceUpdate();
+    // 1. Önce cihazda kayıtlı kullanıcı var mı kontrol et
+    final user = await UserModel.load();
     
+    // Kısa ve zarif bir splash bekleme süresi
+    await Future.delayed(const Duration(milliseconds: 1600));
+    try {
+      await _checkForceUpdate();
+    } catch (_) {}
+    
+    if (!mounted) return;
+
+    // Eğer kullanıcı zaten giriş yapmışsa DOĞRUDAN ana ekrana geç (Flaşlama / Kayıt ekranı görünmesin)
+    if (user != null) {
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 500),
+          pageBuilder: (_, __, ___) => MainScreen(user: user),
+          transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
+        ),
+      );
+      return;
+    }
+
     final prefs = await SharedPreferences.getInstance();
     final cihazId = prefs.getString('cihaz_id');
-    if (!mounted) return;
 
     Widget nextScreen;
     if (cihazId == null) {
@@ -115,35 +134,41 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         final response = await Supabase.instance.client
             .from('personel').select('durum, ad_soyad, meslek, profil_foto').eq('cihaz_id', cihazId).maybeSingle();
         if (response != null && response['durum'] == 'onaylandi') {
-          UserModel? user = await UserModel.load();
-          
-          // Güncelleme sonrası lokal veri kaybolmuşsa Supabase'den kurtar
-          if (user == null && response['ad_soyad'] != null) {
+          UserModel? restoredUser = await UserModel.load();
+          if (restoredUser == null && response['ad_soyad'] != null) {
             final parts = (response['ad_soyad'] as String).split(' ');
             final firstName = parts.isNotEmpty ? parts.first : '';
             final lastName = parts.length > 1 ? parts.sublist(1).join(' ') : '';
-            user = UserModel(
+            restoredUser = UserModel(
               firstName: firstName,
               lastName: lastName,
               jobTitle: response['meslek'] ?? 'Liman İşçisi A',
               photoPath: response['profil_foto'],
             );
-            await user.save(); // Lokal veriye tekrar kaydet
+            await restoredUser.save();
           }
-          
-          if (user != null) { nextScreen = MainScreen(user: user); }
-          else { nextScreen = const ApprovalScreen(); }
-        } else { nextScreen = const ApprovalScreen(); }
-      } catch (e) { nextScreen = const ApprovalScreen(); }
+          if (restoredUser != null) {
+            nextScreen = MainScreen(user: restoredUser);
+          } else {
+            nextScreen = const ApprovalScreen();
+          }
+        } else {
+          nextScreen = const ApprovalScreen();
+        }
+      } catch (e) {
+        nextScreen = const ApprovalScreen();
+      }
     }
 
-    Navigator.of(context).pushReplacement(
-      PageRouteBuilder(
-        transitionDuration: const Duration(milliseconds: 800),
-        pageBuilder: (_, __, ___) => nextScreen,
-        transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
-      ),
-    );
+    if (mounted) {
+      Navigator.of(context).pushReplacement(
+        PageRouteBuilder(
+          transitionDuration: const Duration(milliseconds: 500),
+          pageBuilder: (_, __, ___) => nextScreen,
+          transitionsBuilder: (_, animation, __, child) => FadeTransition(opacity: animation, child: child),
+        ),
+      );
+    }
   }
 
   @override
