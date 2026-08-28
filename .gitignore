@@ -46,3 +46,6 @@ app.*.map.json
 
 # Large video assets (too big for GitHub, >50MB)
 assets/videos/
+
+# Node.js dependencies
+node_modules/
