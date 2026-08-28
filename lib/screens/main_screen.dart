@@ -15,6 +15,7 @@ import 'vehicle_screen.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:intl/intl.dart';
 import 'chat_list_screen.dart';
+import 'isg_screen.dart';
 import '../utils/socket_service.dart';
 
 class MainScreen extends StatefulWidget {
@@ -491,7 +492,7 @@ class _QuickActionsSheet extends StatelessWidget {
           
           const SizedBox(height: 24),
           
-          // İkinci Satır (Admin, [Boşluk], Sohbet)
+          // İkinci Satır (Admin, [Boşluk], İSG)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -528,7 +529,16 @@ class _QuickActionsSheet extends StatelessWidget {
                 ),
               ),
               
-              const SizedBox(width: 80),
+              _QuickActionItem(
+                icon: Icons.health_and_safety_rounded,
+                title: 'İSG',
+                subtitle: 'İş güvenliği',
+                color: const Color(0xFFEF4444), // Kırmızı
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(parentContext, MaterialPageRoute(builder: (_) => const IsgScreen()));
+                },
+              ),
             ],
           ),
         ],

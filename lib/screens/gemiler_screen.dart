@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'dart:math' as math;
 import '../models/ship_data.dart';
 
 class GemilerScreen extends StatefulWidget {
@@ -9,16 +13,94 @@ class GemilerScreen extends StatefulWidget {
   State<GemilerScreen> createState() => _GemilerScreenState();
 }
 
-class _GemilerScreenState extends State<GemilerScreen> {
-  late List<ShipData> _allShips;
-  String _selectedCategory = 'Rihtimdaki'; // 'Rihtimdaki', 'Demirdeki', 'Beklenen'
+class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProviderStateMixin {
+  List<ShipData> _allShips = [];
+  String _selectedCategory = 'Rihtimdaki'; // 'Rihtimdaki', 'Demirdeki', 'Beklenen', 'Hepsi'
   String _searchQuery = '';
+  ShipData? _selectedRadarShip;
+  bool _isRadarExpanded = true;
+  bool _isLoading = false;
+  String _lastUpdatedText = 'Yükleniyor...';
+
+  late AnimationController _radarAnimController;
 
   @override
   void initState() {
     super.initState();
     _allShips = ShipData.getAllShips();
     _allShips.sort((a, b) => a.sortDate.compareTo(b.sortDate));
+
+    _radarAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat();
+
+    // Canlı sunucudan en güncel AIS gemi verilerini çek
+    _fetchLiveShips();
+  }
+
+  @override
+  void dispose() {
+    _radarAnimController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _fetchLiveShips() async {
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      final response = await http
+          .get(Uri.parse('https://isdemir-chat-server.onrender.com/api/ships/live'))
+          .timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(utf8.decode(response.bodyBytes));
+        if (data['success'] == true && data['ships'] != null) {
+          final List<dynamic> shipList = data['ships'];
+          final List<ShipData> parsedShips = shipList.map((item) {
+            return ShipData(
+              id: item['id']?.toString() ?? '',
+              kategori: item['kategori'] ?? 'Rihtimdaki',
+              gemiAdi: item['gemiAdi'] ?? '',
+              tarihStr: item['tarihStr'] ?? '',
+              firmaUlke: item['firmaUlke'] ?? '',
+              yukCinsi: item['yukCinsi'] ?? '',
+              islem: item['islem'] ?? 'Tahliye',
+              miktar: item['miktar'] is int ? item['miktar'] : (int.tryParse(item['miktar'].toString()) ?? 0),
+              sortDate: DateTime.now(),
+              gemiTipi: item['gemiTipi'] ?? 'Bulk Carrier',
+              bayrak: item['bayrak'] ?? '🇹🇷 Türkiye',
+              imoNo: item['imoNo'] ?? '',
+              iskeleNo: item['iskeleNo'] ?? '',
+              progress: (item['progress'] is num) ? (item['progress'] as num).toDouble() : 0.0,
+              lat: (item['lat'] is num) ? (item['lat'] as num).toDouble() : 36.7267,
+              lng: (item['lng'] is num) ? (item['lng'] as num).toDouble() : 36.1950,
+              heading: (item['heading'] is num) ? (item['heading'] as num).toDouble() : 45.0,
+              speedKnots: (item['speedKnots'] is num) ? (item['speedKnots'] as num).toDouble() : 0.0,
+              durum: item['durum'] ?? 'Aktif',
+            );
+          }).toList();
+
+          setState(() {
+            _allShips = parsedShips;
+            final now = DateTime.now();
+            _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Canlı)';
+          });
+        }
+      }
+    } catch (_) {
+      // Hata durumunda yerel verileri korur
+      setState(() {
+        final now = DateTime.now();
+        _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')} (Önbellek)';
+      });
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   int _getShipCount(String category) {
@@ -31,504 +113,1177 @@ class _GemilerScreenState extends State<GemilerScreen> {
 
   List<ShipData> get _filteredShips {
     return _allShips.where((s) {
-      final matchesCategory = s.kategori == _selectedCategory;
+      final matchesCategory = _selectedCategory == 'Hepsi' || s.kategori == _selectedCategory;
       final matchesSearch = s.gemiAdi.toLowerCase().contains(_searchQuery.toLowerCase()) ||
           s.firmaUlke.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          s.yukCinsi.toLowerCase().contains(_searchQuery.toLowerCase());
+          s.yukCinsi.toLowerCase().contains(_searchQuery.toLowerCase()) ||
+          s.iskeleNo.toLowerCase().contains(_searchQuery.toLowerCase());
       return matchesCategory && matchesSearch;
     }).toList();
   }
 
+  Future<void> _openMarineTraffic() async {
+    final uri = Uri.parse('https://www.marinetraffic.com/en/ais/home/centerx:36.1950/centery:36.7267/zoom:15');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('MarineTraffic haritası açılamadı.')),
+        );
+      }
+    }
+  }
+
+  void _showShipDetailsModal(ShipData ship) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (context) => _ShipDetailBottomSheet(ship: ship),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final rihtimCount = _getShipCount('Rihtimdaki');
+    final demirCount = _getShipCount('Demirdeki');
+    final beklenenCount = _getShipCount('Beklenen');
+    final totalTon = _getTotalTonnage();
+
+    final fNumber = NumberFormat('#,###', 'tr_TR');
+
     return Scaffold(
-      backgroundColor: const Color(0xFFF8F9FA),
-      body: CustomScrollView(
-        slivers: [
-          _buildSliverHeader(),
-          SliverToBoxAdapter(
-            child: _buildBodyContent(),
-          ),
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  return _buildShipCard(_filteredShips[index]);
-                },
-                childCount: _filteredShips.length,
-              ),
-            ),
-          ),
-          const SliverToBoxAdapter(child: SizedBox(height: 100)), // Bottom padding
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSliverHeader() {
-    return SliverAppBar(
-      expandedHeight: 220.0,
-      pinned: true,
-      backgroundColor: const Color(0xFF4338CA), // Koyu kırmızı
-      elevation: 0,
-      iconTheme: const IconThemeData(color: Colors.white),
-      flexibleSpace: FlexibleSpaceBar(
-        background: Stack(
-          fit: StackFit.expand,
-          children: [
-            // Arka plan gradyanı ve görsel
-            Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    Color(0xFF4338CA),
-                    Color(0xFF2E1065),
-                  ],
-                ),
-              ),
-            ),
-            // Opsiyonel liman görseli
-            Opacity(
-              opacity: 0.15,
-              child: Image.asset(
-                'assets/images/port_background.png',
-                fit: BoxFit.cover,
-                errorBuilder: (context, error, stackTrace) => const SizedBox(),
-              ),
-            ),
-            // Başlık ve Açıklama
-            Positioned(
-              top: 100, // AppBar'ın altına gelmesi için
-              left: 20,
-              right: 20,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Gemi Durum Raporu',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Liman operasyonlarını anlık takip edin.',
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.8),
-                      fontSize: 14,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            // Alt kısımdaki sekmeler
-            Positioned(
-              bottom: 0,
-              left: 0,
-              right: 0,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    _buildCustomTab('Rihtimdaki', 'Rıhtımdaki', Icons.directions_boat_rounded),
-                    _buildCustomTab('Demirdeki', 'Demirdeki', Icons.anchor_rounded),
-                    _buildCustomTab('Beklenen', 'Beklenen', Icons.calendar_month_rounded),
-                  ],
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCustomTab(String categoryId, String label, IconData icon) {
-    final isSelected = _selectedCategory == categoryId;
-    return GestureDetector(
-      onTap: () {
-        setState(() {
-          _selectedCategory = categoryId;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF3B82F6) : Colors.transparent,
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: isSelected ? const Color(0xFF3B82F6) : Colors.transparent,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: isSelected ? Colors.white : Colors.white70,
-            ),
-            const SizedBox(width: 8),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.white70,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                fontSize: 14,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBodyContent() {
-    return Container(
-      decoration: const BoxDecoration(
-        color: Color(0xFFF8F9FA),
-        borderRadius: BorderRadius.only(
-          topLeft: Radius.circular(24),
-          topRight: Radius.circular(24),
-        ),
-      ),
-      transform: Matrix4.translationValues(0, -10, 0), // Sekmelerin biraz altına sarkması için
-      child: Column(
-        children: [
-          const SizedBox(height: 16),
-          // Arama çubuğu
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16.0),
-            child: Row(
-              children: [
-                Expanded(
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 10,
-                          offset: const Offset(0, 2),
-                        ),
-                      ],
-                    ),
-                    child: TextField(
-                      onChanged: (value) => setState(() => _searchQuery = value),
-                      decoration: InputDecoration(
-                        hintText: 'Gemi, firma, yük arayın...',
-                        hintStyle: TextStyle(color: Colors.grey[400]),
-                        prefixIcon: Icon(Icons.search_rounded, color: Colors.grey[400]),
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Container(
-                  padding: const EdgeInsets.all(14),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.03),
-                        blurRadius: 10,
-                        offset: const Offset(0, 2),
-                      ),
-                    ],
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.filter_list_rounded, color: Colors.grey[700], size: 20),
-                      const SizedBox(width: 6),
-                      Text('Filtrele', style: TextStyle(color: Colors.grey[800], fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-          // İstatistik Kartları (Yatay kaydırılabilir)
-          SizedBox(
-            height: 90,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              children: [
-                _buildStatCard('Rıhtımdaki', _getShipCount('Rihtimdaki').toString(), 'Gemi', Icons.directions_boat_rounded, const Color(0xFF10B981)),
-                const SizedBox(width: 12),
-                _buildStatCard('Demirdeki', _getShipCount('Demirdeki').toString(), 'Gemi', Icons.anchor_rounded, const Color(0xFFF59E0B)),
-                const SizedBox(width: 12),
-                _buildStatCard('Beklenen', _getShipCount('Beklenen').toString(), 'Gemi', Icons.calendar_month_rounded, const Color(0xFF8B5CF6)),
-                const SizedBox(width: 12),
-                _buildStatCard('Toplam Yük', NumberFormat('#,###', 'tr_TR').format(_getTotalTonnage()), 'Ton', Icons.shopping_bag_rounded, const Color(0xFF3B82F6)),
-              ],
-            ),
-          ),
-          const SizedBox(height: 20),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildStatCard(String title, String count, String unit, IconData icon, Color color) {
-    return Container(
-      width: 130,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.grey[100]!),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 8,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Row(
+      backgroundColor: const Color(0xFF0F172A), // Modern lacivert-siyah koyu zemin
+      body: SafeArea(
+        bottom: false,
+        child: RefreshIndicator(
+          onRefresh: _fetchLiveShips,
+          color: const Color(0xFF38BDF8),
+          backgroundColor: const Color(0xFF1E293B),
+          child: Column(
             children: [
-              Icon(icon, color: color, size: 16),
-              const SizedBox(width: 6),
-              Text(
-                title,
-                style: TextStyle(
-                  color: color,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 11,
+              // Üst Başlık & Kontrol Çubuğu
+              _buildTopAppBar(),
+
+              // Ana İçerik
+              Expanded(
+                child: CustomScrollView(
+                  physics: const AlwaysScrollableScrollPhysics(),
+                  slivers: [
+                    // 1. Canlı AIS Radarı & Harita Görünümü
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+                        child: _buildRadarCard(),
+                      ),
+                    ),
+
+                    // 2. Liman Canlı İstatistik Şeridi
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                        child: _buildPortStatsBar(rihtimCount, demirCount, beklenenCount, fNumber.format(totalTon)),
+                      ),
+                    ),
+
+                    // 3. Arama ve Filtre Butonları
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 16, 16, 12),
+                        child: _buildFilterAndSearch(),
+                      ),
+                    ),
+
+                    // 4. Gemi Listesi
+                    SliverPadding(
+                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 100),
+                      sliver: _filteredShips.isEmpty
+                          ? SliverToBoxAdapter(
+                              child: Container(
+                                padding: const EdgeInsets.all(40),
+                                alignment: Alignment.center,
+                                child: Column(
+                                  children: [
+                                    Icon(Icons.directions_boat_outlined, size: 56, color: Colors.white.withValues(alpha: 0.2)),
+                                    const SizedBox(height: 12),
+                                    const Text(
+                                      'Bu kategoride gemi bulunamadı.',
+                                      style: TextStyle(color: Colors.white60, fontSize: 14),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  final ship = _filteredShips[index];
+                                  return _buildLiveShipCard(ship, fNumber);
+                                },
+                                childCount: _filteredShips.length,
+                              ),
+                            ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const Spacer(),
-          Text(
-            count,
-            style: const TextStyle(
-              color: Colors.black87,
-              fontWeight: FontWeight.bold,
-              fontSize: 20,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTopAppBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        border: Border(bottom: BorderSide(color: Colors.white.withValues(alpha: 0.08))),
+      ),
+      child: Row(
+        children: [
+          IconButton(
+            onPressed: () => Navigator.pop(context),
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+          ),
+          const SizedBox(width: 14),
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0EA5E9).withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: const Icon(Icons.radar_rounded, color: Color(0xFF38BDF8), size: 22),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Text(
+                      'İSDEMİR LİMANI',
+                      style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                    ),
+                    SizedBox(width: 8),
+                    _PulsingLiveDot(),
+                  ],
+                ),
+                Text(
+                  '36.7267° K, 36.1950° D • $_lastUpdatedText',
+                  style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
+                ),
+              ],
             ),
           ),
-          Text(
-            unit,
-            style: TextStyle(
-              color: Colors.grey[500],
-              fontSize: 11,
+          // Yenile Butonu
+          IconButton(
+            onPressed: _isLoading ? null : _fetchLiveShips,
+            icon: _isLoading
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
+                  )
+                : const Icon(Icons.refresh_rounded, color: Color(0xFF38BDF8), size: 22),
+          ),
+          const SizedBox(width: 4),
+          // MarineTraffic Dış Link Butonu
+          TextButton.icon(
+            onPressed: _openMarineTraffic,
+            style: TextButton.styleFrom(
+              backgroundColor: const Color(0xFF0284C7).withValues(alpha: 0.25),
+              foregroundColor: const Color(0xFF38BDF8),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
             ),
+            icon: const Icon(Icons.public, size: 14),
+            label: const Text('Harita', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildShipCard(ShipData ship) {
-    // Kategoriye göre veya işleme göre renk belirleme
-    Color primaryColor;
-    IconData actionIcon;
-    String actionLabel = ship.islem;
-
-    if (ship.islem.toLowerCase().contains('tahliye')) {
-      primaryColor = const Color(0xFF10B981); // Yeşil
-      actionIcon = Icons.arrow_downward_rounded;
-    } else if (ship.islem.toLowerCase().contains('yukleme') || ship.islem.toLowerCase().contains('yükleme')) {
-      primaryColor = const Color(0xFFF59E0B); // Turuncu
-      actionIcon = Icons.arrow_upward_rounded;
-    } else {
-      primaryColor = const Color(0xFF3B82F6); // Mavi (Beklenen vs)
-      actionIcon = Icons.swap_horiz_rounded;
-    }
-    
-    // MKK MADRID için özel durum (resimdeki gibi mavi olması için)
-    if (ship.gemiAdi == 'MKK MADRID') {
-      primaryColor = const Color(0xFF3B82F6);
-    }
-
-    final numberFormat = NumberFormat('#,###', 'tr_TR');
-    final miktarFormatted = numberFormat.format(ship.miktar);
-
+  Widget _buildRadarCard() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.3)),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 2),
+            color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+            blurRadius: 20,
+            offset: const Offset(0, 4),
           ),
         ],
       ),
-      child: IntrinsicHeight(
-        child: Row(
-          children: [
-            // Sol dikey renkli bar
-            Container(
-              width: 5,
-              decoration: BoxDecoration(
-                color: primaryColor,
-                borderRadius: const BorderRadius.only(
-                  topLeft: Radius.circular(16),
-                  bottomLeft: Radius.circular(16),
+      child: Column(
+        children: [
+          // Radar Başlığı
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.satellite_alt_rounded, color: Color(0xFF38BDF8), size: 18),
+                    SizedBox(width: 8),
+                    Text(
+                      'İsdemir Liman Radarı (Canlı AIS)',
+                      style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _isRadarExpanded = !_isRadarExpanded;
+                    });
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _isRadarExpanded ? 'Gizle' : 'Genişlet',
+                          style: const TextStyle(color: Colors.white70, fontSize: 11),
+                        ),
+                        Icon(
+                          _isRadarExpanded ? Icons.keyboard_arrow_up : Icons.keyboard_arrow_down,
+                          color: Colors.white70,
+                          size: 14,
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          if (_isRadarExpanded) ...[
+            // İnteraktif Radar Sahnesi
+            ClipRRect(
+              borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
+              child: SizedBox(
+                height: 250,
+                width: double.infinity,
+                child: Stack(
+                  children: [
+                    // Arka Plan Deniz & Liman Vektör Çizimi + Dönen Radar Sweep
+                    AnimatedBuilder(
+                      animation: _radarAnimController,
+                      builder: (context, child) {
+                        return CustomPaint(
+                          size: const Size(double.infinity, 250),
+                          painter: _IsdemirPortRadarPainter(
+                            sweepAngle: _radarAnimController.value * 2 * math.pi,
+                          ),
+                        );
+                      },
+                    ),
+
+                    // Liman İskele Etiketleri
+                    Positioned(
+                      left: 20,
+                      top: 140,
+                      child: _buildBerthTag('1-2. Kömür / Cevher İskelesi'),
+                    ),
+                    Positioned(
+                      left: 110,
+                      top: 180,
+                      child: _buildBerthTag('3-4. Slab / Sac İskelesi'),
+                    ),
+                    Positioned(
+                      right: 20,
+                      top: 40,
+                      child: _buildBerthTag('Demirleme Sahası (Anchorage)'),
+                    ),
+
+                    // Canlı Gemiler (Radar Üstünde Etkileşimli Noktalar)
+                    ..._allShips.map((ship) {
+                      return _buildRadarShipMarker(ship);
+                    }),
+
+                    // Sol Alt: Koordinat Bilgisi
+                    Positioned(
+                      left: 12,
+                      bottom: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                        ),
+                        child: const Text(
+                          'LAT: 36.7267° N • LON: 36.1950° E',
+                          style: TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+
+                    // Sağ Alt: Renk Lejantı
+                    Positioned(
+                      right: 12,
+                      bottom: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withValues(alpha: 0.6),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _LegendDot(color: Color(0xFF10B981), label: 'Rıhtım'),
+                            SizedBox(width: 8),
+                            _LegendDot(color: Color(0xFFF59E0B), label: 'Demir'),
+                            SizedBox(width: 8),
+                            _LegendDot(color: Color(0xFF38BDF8), label: 'Beklenen'),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
-            Expanded(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBerthTag(String title) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F172A).withValues(alpha: 0.75),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+      ),
+      child: Text(
+        title,
+        style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 9, fontWeight: FontWeight.w600),
+      ),
+    );
+  }
+
+  Widget _buildRadarShipMarker(ShipData ship) {
+    double top = 0;
+    double left = 0;
+    Color shipColor = const Color(0xFF10B981); // Yeşil: Rıhtım
+
+    if (ship.kategori == 'Rihtimdaki') {
+      shipColor = const Color(0xFF10B981);
+      if (ship.id == '1') { top = 100; left = 45; }
+      else if (ship.id == '2') { top = 125; left = 75; }
+      else if (ship.id == '3') { top = 145; left = 115; }
+      else if (ship.id == '4') { top = 165; left = 145; }
+      else if (ship.id == '5') { top = 185; left = 175; }
+      else if (ship.id == '6') { top = 195; left = 205; }
+      else { top = 205; left = 230; }
+    } else if (ship.kategori == 'Demirdeki') {
+      shipColor = const Color(0xFFF59E0B); // Turuncu/Sarı: Demir
+      if (ship.id == '8') { top = 40; left = 210; }
+      else { top = 65; left = 270; }
+    } else {
+      shipColor = const Color(0xFF38BDF8); // Mavi: Beklenen
+      if (ship.id == '10') { top = 30; left = 130; }
+      else if (ship.id == '11') { top = 50; left = 80; }
+      else if (ship.id == '12') { top = 20; left = 290; }
+      else { top = 80; left = 320; }
+    }
+
+    final isSelected = _selectedRadarShip?.id == ship.id;
+
+    return Positioned(
+      top: top,
+      left: left,
+      child: GestureDetector(
+        onTap: () {
+          setState(() {
+            _selectedRadarShip = ship;
+          });
+          _showShipDetailsModal(ship);
+        },
+        child: Container(
+          padding: const EdgeInsets.all(4),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: isSelected ? 24 : 18,
+                height: isSelected ? 24 : 18,
+                decoration: BoxDecoration(
+                  color: shipColor,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: isSelected ? 2.5 : 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: shipColor.withValues(alpha: 0.8),
+                      blurRadius: isSelected ? 12 : 6,
+                      spreadRadius: isSelected ? 4 : 1,
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Icon(
+                    ship.kategori == 'Demirdeki' ? Icons.anchor : Icons.navigation_rounded,
+                    color: Colors.black87,
+                    size: isSelected ? 12 : 9,
+                  ),
+                ),
+              ),
+              const SizedBox(height: 2),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.8),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  ship.gemiAdi,
+                  style: TextStyle(
+                    color: isSelected ? const Color(0xFF38BDF8) : Colors.white,
+                    fontSize: 8,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPortStatsBar(int rihtimCount, int demirCount, int beklenenCount, String totalTonStr) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1E293B),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _buildStatItem('Rıhtımda', '$rihtimCount Gemi', const Color(0xFF10B981), Icons.dock_rounded),
+          ),
+          Container(width: 1, height: 36, color: Colors.white.withValues(alpha: 0.1)),
+          Expanded(
+            child: _buildStatItem('Demirde', '$demirCount Gemi', const Color(0xFFF59E0B), Icons.anchor_rounded),
+          ),
+          Container(width: 1, height: 36, color: Colors.white.withValues(alpha: 0.1)),
+          Expanded(
+            child: _buildStatItem('Beklenen', '$beklenenCount Gemi', const Color(0xFF38BDF8), Icons.schedule_rounded),
+          ),
+          Container(width: 1, height: 36, color: Colors.white.withValues(alpha: 0.1)),
+          Expanded(
+            child: _buildStatItem('Hacim', '${(totalTonStr.split('.')[0])}k Ton', const Color(0xFFA855F7), Icons.inventory_2_rounded),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem(String label, String value, Color color, IconData icon) {
+    return Column(
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 12, color: color),
+            const SizedBox(width: 4),
+            Text(label, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
+          ],
+        ),
+        const SizedBox(height: 4),
+        Text(
+          value,
+          style: TextStyle(color: color, fontSize: 13, fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildFilterAndSearch() {
+    return Column(
+      children: [
+        // Arama Kutusu
+        Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF1E293B),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: TextField(
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+            onChanged: (val) {
+              setState(() {
+                _searchQuery = val;
+              });
+            },
+            decoration: InputDecoration(
+              hintText: 'Gemi adı, yük cinsi, iskele veya ülke ara...',
+              hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4), fontSize: 13),
+              prefixIcon: const Icon(Icons.search_rounded, color: Color(0xFF38BDF8), size: 20),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, color: Colors.white54, size: 18),
+                      onPressed: () {
+                        setState(() {
+                          _searchQuery = '';
+                        });
+                      },
+                    )
+                  : null,
+              border: InputBorder.none,
+              contentPadding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
+            ),
+          ),
+        ),
+        const SizedBox(height: 12),
+
+        // Kategori Butonları
+        SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: [
+              _buildCategoryChip('Rihtimdaki', '🟢 Rıhtımdaki (${_getShipCount('Rihtimdaki')})'),
+              const SizedBox(width: 8),
+              _buildCategoryChip('Demirdeki', '🟡 Demirdeki (${_getShipCount('Demirdeki')})'),
+              const SizedBox(width: 8),
+              _buildCategoryChip('Beklenen', '🔵 Beklenen (${_getShipCount('Beklenen')})'),
+              const SizedBox(width: 8),
+              _buildCategoryChip('Hepsi', 'Tümü (${_allShips.length})'),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildCategoryChip(String catKey, String title) {
+    final isSelected = _selectedCategory == catKey;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedCategory = catKey;
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFF0284C7) : const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected ? const Color(0xFF38BDF8) : Colors.white.withValues(alpha: 0.08),
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF0284C7).withValues(alpha: 0.4),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Text(
+          title,
+          style: TextStyle(
+            color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLiveShipCard(ShipData ship, NumberFormat fNumber) {
+    Color badgeColor = const Color(0xFF10B981);
+    IconData statusIcon = Icons.dock_rounded;
+
+    if (ship.kategori == 'Demirdeki') {
+      badgeColor = const Color(0xFFF59E0B);
+      statusIcon = Icons.anchor_rounded;
+    } else if (ship.kategori == 'Beklenen') {
+      badgeColor = const Color(0xFF38BDF8);
+      statusIcon = Icons.sailing_rounded;
+    }
+
+    final isTahliye = ship.islem == 'Tahliye';
+
+    return GestureDetector(
+      onTap: () => _showShipDetailsModal(ship),
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1E293B),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.2),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Kart Üst Başlık Şeridi
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: BoxDecoration(
+                  color: badgeColor.withValues(alpha: 0.08),
+                  border: Border(bottom: BorderSide(color: badgeColor.withValues(alpha: 0.15))),
+                ),
                 child: Row(
                   children: [
-                    // Sol İkon
                     Container(
-                      width: 50,
-                      height: 50,
+                      padding: const EdgeInsets.all(6),
                       decoration: BoxDecoration(
-                        color: primaryColor.withValues(alpha: 0.1),
-                        shape: BoxShape.circle,
+                        color: badgeColor.withValues(alpha: 0.2),
+                        borderRadius: BorderRadius.circular(8),
                       ),
-                      child: Icon(Icons.directions_boat_rounded, color: primaryColor, size: 28),
+                      child: Icon(statusIcon, color: badgeColor, size: 16),
                     ),
-                    const SizedBox(width: 16),
-                    
-                    // Orta Bilgiler (Ad, Firma, Yük)
+                    const SizedBox(width: 10),
                     Expanded(
-                      flex: 3,
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
                             ship.gemiAdi,
                             style: const TextStyle(
-                              fontSize: 16,
+                              color: Colors.white,
+                              fontSize: 15,
                               fontWeight: FontWeight.bold,
-                              color: Colors.black87,
                             ),
                           ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Icon(Icons.business_rounded, size: 14, color: Colors.grey[500]),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  ship.firmaUlke,
-                                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Icon(Icons.inventory_2_rounded, size: 14, color: Colors.grey[500]),
-                              const SizedBox(width: 4),
-                              Expanded(
-                                child: Text(
-                                  ship.yukCinsi,
-                                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    
-                    // Sağ Bilgiler (Tarih, İşlem, Tonaj)
-                    Expanded(
-                      flex: 2,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          // Tarih Hapı
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
-                            decoration: BoxDecoration(
-                              color: primaryColor.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(Icons.calendar_month_rounded, size: 12, color: primaryColor),
-                                const SizedBox(width: 4),
-                                Text(
-                                  ship.tarihStr,
-                                  style: TextStyle(
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                    color: primaryColor,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          // İşlem
-                          Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Icon(actionIcon, color: primaryColor, size: 14),
-                              const SizedBox(width: 2),
-                              Text(
-                                actionLabel,
-                                style: TextStyle(
-                                  color: primaryColor,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          // Tonaj
                           Text(
-                            miktarFormatted,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w900,
-                              color: Colors.black87,
-                            ),
-                          ),
-                          const Text(
-                            'Ton',
-                            style: TextStyle(
-                              fontSize: 10,
-                              color: Colors.grey,
-                              fontWeight: FontWeight.bold,
-                            ),
+                            '${ship.gemiTipi} • ${ship.bayrak}',
+                            style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 11),
                           ),
                         ],
                       ),
                     ),
-                    
-                    const SizedBox(width: 8),
-                    // Yön ikonu
-                    Icon(Icons.chevron_right_rounded, color: Colors.grey[400]),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isTahliye ? const Color(0xFFEF4444).withValues(alpha: 0.15) : const Color(0xFF10B981).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        ship.islem.toUpperCase(),
+                        style: TextStyle(
+                          color: isTahliye ? const Color(0xFFF87171) : const Color(0xFF34D399),
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ],
                 ),
               ),
-            ),
-          ],
+
+              // Kart Gövdesi
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    // İskele & Yük Bilgisi
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildInfoColumn('Konum / İskele', ship.iskeleNo, Icons.place_rounded, const Color(0xFF38BDF8)),
+                        ),
+                        Expanded(
+                          child: _buildInfoColumn('Yük Cinsi & Miktar', '${ship.yukCinsi} (${fNumber.format(ship.miktar)} Ton)', Icons.inventory_2_rounded, const Color(0xFFFBBF24)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 12),
+
+                    // Tarih & Firma
+                    Row(
+                      children: [
+                        Expanded(
+                          child: _buildInfoColumn('Tarih / Laycan', ship.tarihStr, Icons.event_rounded, const Color(0xFFA78BFA)),
+                        ),
+                        Expanded(
+                          child: _buildInfoColumn('Firma / Menşei', ship.firmaUlke, Icons.business_rounded, const Color(0xFF94A3B8)),
+                        ),
+                      ],
+                    ),
+
+                    // Eğer Rıhtımdaysa: Canlı Operasyon İlerleme Çubuğu
+                    if (ship.kategori == 'Rihtimdaki' && ship.progress > 0) ...[
+                      const SizedBox(height: 14),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(
+                                ship.durum,
+                                style: const TextStyle(color: Color(0xFF34D399), fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                              Text(
+                                '%${(ship.progress * 100).toInt()}',
+                                style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(4),
+                            child: LinearProgressIndicator(
+                              value: ship.progress,
+                              minHeight: 6,
+                              backgroundColor: Colors.white.withValues(alpha: 0.1),
+                              valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
+    );
+  }
+
+  Widget _buildInfoColumn(String title, String value, IconData icon, Color iconColor) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 14, color: iconColor),
+        const SizedBox(width: 6),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                title,
+                style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 10),
+              ),
+              const SizedBox(height: 2),
+              Text(
+                value,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ----------------------------------------------------
+// CANLI RADAR VE İSDEMİR LİMANI HARİTA ÇİZİM PAINTER'I
+// ----------------------------------------------------
+class _IsdemirPortRadarPainter extends CustomPainter {
+  final double sweepAngle;
+
+  _IsdemirPortRadarPainter({required this.sweepAngle});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1. Deniz Arka Planı (Derin Mavi Radyal Gradyan)
+    final seaRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final seaPaint = Paint()
+      ..shader = RadialGradient(
+        center: const Alignment(-0.2, 0.4),
+        radius: 1.2,
+        colors: const [
+          Color(0xFF0F2744),
+          Color(0xFF091424),
+        ],
+      ).createShader(seaRect);
+    canvas.drawRect(seaRect, seaPaint);
+
+    // 2. İsdemir Sahil Şeridi ve Rıhtım Dalgakıranı Vektör Çizimi (MarineTraffic Harita Formuna Uygun)
+    final landPaint = Paint()
+      ..color = const Color(0xFF1E293B)
+      ..style = PaintingStyle.fill;
+
+    final landStroke = Paint()
+      ..color = const Color(0xFF38BDF8).withValues(alpha: 0.3)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+
+    // Sahil ve İskele Yolu
+    final portPath = Path();
+    portPath.moveTo(0, 0);
+    portPath.lineTo(size.width * 0.35, 0);
+    portPath.lineTo(size.width * 0.30, size.height * 0.45);
+    
+    // Ana Kömür & Cevher İskelesi (Uzun İskele)
+    portPath.lineTo(size.width * 0.15, size.height * 0.60);
+    portPath.lineTo(size.width * 0.17, size.height * 0.63);
+    portPath.lineTo(size.width * 0.32, size.height * 0.50);
+    
+    // Slab & Sac Rıhtım Havuzu (İç Liman)
+    portPath.lineTo(size.width * 0.38, size.height * 0.68);
+    portPath.lineTo(size.width * 0.44, size.height * 0.62);
+    portPath.lineTo(size.width * 0.48, size.height * 0.72);
+    portPath.lineTo(size.width * 0.42, size.height * 0.80);
+    
+    // Dalgakıran Ucu
+    portPath.lineTo(size.width * 0.30, size.height * 0.88);
+    portPath.lineTo(size.width * 0.32, size.height * 0.92);
+    portPath.lineTo(size.width * 0.48, size.height * 0.85);
+    portPath.lineTo(size.width * 0.52, size.height * 1.0);
+    portPath.lineTo(0, size.height);
+    portPath.close();
+
+    canvas.drawPath(portPath, landPaint);
+    canvas.drawPath(portPath, landStroke);
+
+    // 3. Radar Sonar Halkaları
+    final radarCenter = Offset(size.width * 0.4, size.height * 0.5);
+    final ringPaint = Paint()
+      ..color = const Color(0xFF0EA5E9).withValues(alpha: 0.15)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    for (double r = 40; r <= 180; r += 45) {
+      canvas.drawCircle(radarCenter, r, ringPaint);
+    }
+
+    // Radar Eksen Çizgileri
+    final axisPaint = Paint()
+      ..color = const Color(0xFF0EA5E9).withValues(alpha: 0.1)
+      ..strokeWidth = 1.0;
+    canvas.drawLine(Offset(radarCenter.dx - 180, radarCenter.dy), Offset(radarCenter.dx + 180, radarCenter.dy), axisPaint);
+    canvas.drawLine(Offset(radarCenter.dx, radarCenter.dy - 180), Offset(radarCenter.dx, radarCenter.dy + 180), axisPaint);
+
+    // 4. Dönen Radar Tarama Işını (Sweep Glow)
+    final sweepPaint = Paint()
+      ..shader = SweepGradient(
+        center: const Alignment(-0.2, 0.0),
+        startAngle: 0.0,
+        endAngle: math.pi / 3,
+        transform: GradientRotation(sweepAngle),
+        colors: [
+          const Color(0xFF38BDF8).withValues(alpha: 0.35),
+          const Color(0xFF0EA5E9).withValues(alpha: 0.0),
+        ],
+      ).createShader(Rect.fromCircle(center: radarCenter, radius: 180));
+
+    canvas.drawCircle(radarCenter, 180, sweepPaint);
+
+    // 5. Radar Merkez Noktası
+    final centerDotPaint = Paint()
+      ..color = const Color(0xFF38BDF8)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(radarCenter, 3.5, centerDotPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _IsdemirPortRadarPainter oldDelegate) {
+    return oldDelegate.sweepAngle != sweepAngle;
+  }
+}
+
+// ----------------------------------------------------
+// CANLI GEMİ DETAY MODAL BOTTOM SHEET
+// ----------------------------------------------------
+class _ShipDetailBottomSheet extends StatelessWidget {
+  final ShipData ship;
+
+  const _ShipDetailBottomSheet({required this.ship});
+
+  @override
+  Widget build(BuildContext context) {
+    final isTahliye = ship.islem == 'Tahliye';
+    final fNumber = NumberFormat('#,###', 'tr_TR');
+
+    return Container(
+      decoration: const BoxDecoration(
+        color: Color(0xFF1E293B),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Tutamaç
+          Center(
+            child: Container(
+              width: 40,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Başlık
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.directions_boat_filled_rounded, color: Color(0xFF38BDF8), size: 28),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      ship.gemiAdi,
+                      style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${ship.gemiTipi} • ${ship.imoNo}',
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                decoration: BoxDecoration(
+                  color: isTahliye ? const Color(0xFFEF4444).withValues(alpha: 0.2) : const Color(0xFF10B981).withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  ship.islem.toUpperCase(),
+                  style: TextStyle(
+                    color: isTahliye ? const Color(0xFFF87171) : const Color(0xFF34D399),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // Canlı Durum Kartı
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.sensors_rounded, color: Color(0xFF34D399), size: 20),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('CANLI AIS DURUMU', style: TextStyle(color: Color(0xFF94A3B8), fontSize: 10, fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 2),
+                      Text(ship.durum, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                    ],
+                  ),
+                ),
+                Text(
+                  '${ship.speedKnots} kn',
+                  style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 14, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Detay Izgarası
+          _buildDetailRow('Bayrak', ship.bayrak, 'İskele / Rıhtım', ship.iskeleNo),
+          const SizedBox(height: 12),
+          _buildDetailRow('Yük Cinsi', ship.yukCinsi, 'Miktar', '${fNumber.format(ship.miktar)} Ton'),
+          const SizedBox(height: 12),
+          _buildDetailRow('Firma / Menşei', ship.firmaUlke, 'Tarih / Laycan', ship.tarihStr),
+          const SizedBox(height: 12),
+          _buildDetailRow('Koordinat', '${ship.lat.toStringAsFixed(4)}° N, ${ship.lng.toStringAsFixed(4)}° E', 'Rota (Heading)', '${ship.heading.toInt()}°'),
+
+          const SizedBox(height: 24),
+
+          // MarineTraffic'te Canlı Aç Butonu
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () async {
+                final query = Uri.encodeComponent(ship.gemiAdi);
+                final uri = Uri.parse('https://www.marinetraffic.com/en/ais/index/search/all/keyword:$query');
+                if (await canLaunchUrl(uri)) {
+                  await launchUrl(uri, mode: LaunchMode.externalApplication);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF0284C7),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              icon: const Icon(Icons.travel_explore_rounded, size: 18),
+              label: Text('${ship.gemiAdi} Gemisini MarineTraffic\'te İzle', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label1, String val1, String label2, String val2) {
+    return Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label1, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
+              const SizedBox(height: 2),
+              Text(val1, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label2, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11)),
+              const SizedBox(height: 2),
+              Text(val2, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ----------------------------------------------------
+// YARDIMCI WIDGET'LAR
+// ----------------------------------------------------
+class _PulsingLiveDot extends StatefulWidget {
+  const _PulsingLiveDot();
+
+  @override
+  State<_PulsingLiveDot> createState() => _PulsingLiveDotState();
+}
+
+class _PulsingLiveDotState extends State<_PulsingLiveDot> with SingleTickerProviderStateMixin {
+  late AnimationController _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _anim = AnimationController(vsync: this, duration: const Duration(seconds: 1))..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _anim.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (context, child) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+          decoration: BoxDecoration(
+            color: const Color(0xFF10B981).withValues(alpha: 0.15 + (_anim.value * 0.2)),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: const Color(0xFF34D399).withValues(alpha: 0.4 + (_anim.value * 0.4))),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF34D399),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF34D399).withValues(alpha: _anim.value),
+                      blurRadius: 6,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Text(
+                'CANLI',
+                style: TextStyle(color: Color(0xFF34D399), fontSize: 9, fontWeight: FontWeight.bold),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _LegendDot extends StatelessWidget {
+  final Color color;
+  final String label;
+
+  const _LegendDot({required this.color, required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 6,
+          height: 6,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 9)),
+      ],
     );
   }
 }

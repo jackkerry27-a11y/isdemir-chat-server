@@ -190,7 +190,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
       url,
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Authorization': 'Basic ${const String.fromEnvironment('ONESIGNAL_API_KEY', defaultValue: 'YOUR_ONESIGNAL_KEY_HERE')}',
+        'Authorization': 'Basic os_v2_app_otzfqecjvjg5de4mymbcsnukmonqgdbtkt5urbupftj4pnazuivy4g6blrfco6fmrqurdgvqpt7x26yg4fqvb65p7gls3m42ktckbnq',
       },
       body: json.encode({
         'app_id': '74f25810-49aa-4dd1-938c-c30229368a63',

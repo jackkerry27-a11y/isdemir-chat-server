@@ -97,6 +97,33 @@ void main() {
 29 Ağustos Cumartesi (≈1.247): Yayla Çorba 234, Kayseri Köfte 455, Pirinç/Bulgur Pilavı 370, Meyve 100, Ayran 88
 30 Ağustos Pazar (≈1.672): Şehriye Çorba 246, Karnıyarık 451, Pirinç/Bulgur Pilavı 370, Yoğurt Tatlısı 524, Yoğurt 81''';
 
+  String getProteinForFood(String foodName) {
+    final n = foodName.toLowerCase();
+    if (n.contains('döner') || n.contains('kavurma') || n.contains('kebabı') || n.contains('fırınağzı')) return '30g';
+    if (n.contains('köfte') || n.contains('kayseri') || n.contains('kasap') || n.contains('hasanpaşa') || n.contains('terbiyeli') || n.contains('mitide')) return '26g';
+    if (n.contains('piliç') || n.contains('tavuk')) return '28g';
+    if (n.contains('hamburger')) return '24g';
+    if (n.contains('nohut') || n.contains('kuru fasulye')) return '20g';
+    if (n.contains('barbunya')) return '14g';
+    if (n.contains('karnıyarık') || n.contains('musakka') || n.contains('güveç')) return '15g';
+    if (n.contains('dolma') || n.contains('taze fasulye') || n.contains('bezelye') || n.contains('türlü') || n.contains('etli patates')) return '15g';
+    if (n.contains('mercimek') || n.contains('ezogelin') || n.contains('tutmaç') || n.contains('anadolu')) return '8g';
+    if (n.contains('yayla')) return '7g';
+    if (n.contains('şehriye')) return '5g';
+    if (n.contains('domates çorba')) return '4g';
+    if (n.contains('çorba')) return '6g';
+    if (n.contains('nohutlu')) return '9g';
+    if (n.contains('esmer bulgur')) return '7g';
+    if (n.contains('pilav') || n.contains('bulgur')) return '6g';
+    if (n.contains('patates kızartması') || n.contains('fırın patates')) return '3g';
+    if (n.contains('yoğurt')) return '7g';
+    if (n.contains('ayran')) return '5g';
+    if (n.contains('sütlaç') || n.contains('muhallebi') || n.contains('supangle') || n.contains('aşure')) return '6g';
+    if (n.contains('dondurma') || n.contains('baklava') || n.contains('browni') || n.contains('tatlı') || n.contains('pasta') || n.contains('tiramisu') || n.contains('kadayıf')) return '4g';
+    if (n.contains('meyve') || n.contains('komposto')) return '1g';
+    return '5g';
+  }
+
   Map<int, Map<String, dynamic>> days = {};
 
   void process(String text, String keyType) {
@@ -128,17 +155,22 @@ void main() {
         days[dayNum]!['totalCal'] = totalCal;
         
         List<String> mainCourse = [];
+        int totalProt = 0;
         for (var raw in items) {
           raw = raw.trim();
           var parts2 = raw.split(' ');
+          String cal = '';
+          String name = raw;
           if (parts2.length > 1 && int.tryParse(parts2.last) != null) {
-            var cal = parts2.last;
-            var name = parts2.sublist(0, parts2.length - 1).join(' ');
-            mainCourse.add("MealItem('" + name + "', '" + cal + "')");
-          } else {
-            mainCourse.add("MealItem('" + raw + "', '')");
+            cal = parts2.last;
+            name = parts2.sublist(0, parts2.length - 1).join(' ');
           }
+          String prot = getProteinForFood(name);
+          int pVal = int.tryParse(prot.replaceAll('g', '')) ?? 0;
+          totalProt += pVal;
+          mainCourse.add("MealItem('" + name + "', '" + cal + "', '" + prot + "')");
         }
+        days[dayNum]!['totalProt'] = totalProt.toString() + 'g';
         days[dayNum]!['mainCourse'] = mainCourse;
       }
     }
@@ -153,7 +185,8 @@ void main() {
   out.writeln("class MealItem {");
   out.writeln("  final String name;");
   out.writeln("  final String calories;");
-  out.writeln("  const MealItem(this.name, [this.calories = '']);");
+  out.writeln("  final String protein;");
+  out.writeln("  const MealItem(this.name, [this.calories = '', this.protein = '']);");
   out.writeln("}");
   out.writeln("");
   out.writeln("class DailyMenu {");
@@ -162,7 +195,8 @@ void main() {
   out.writeln("  final List<String> salad;");
   out.writeln("  final List<MealItem> mainCourse;");
   out.writeln("  final String totalCalories;");
-  out.writeln("  const DailyMenu({required this.dateText, required this.breakfast, required this.salad, required this.mainCourse, required this.totalCalories});");
+  out.writeln("  final String totalProtein;");
+  out.writeln("  const DailyMenu({required this.dateText, required this.breakfast, required this.salad, required this.mainCourse, required this.totalCalories, this.totalProtein = ''});");
   out.writeln("}");
   out.writeln("");
   out.writeln("class MenuData {");
@@ -175,7 +209,8 @@ void main() {
     out.writeln("      dateText: '" + d['dateText'] + "',");
     out.writeln("      breakfast: const [" + (d['breakfast'] as List).join(', ') + "],");
     out.writeln("      salad: const [" + (d['salad'] as List).join(', ') + "],");
-    out.writeln("      totalCalories: '" + d['totalCal'] + "',");
+    out.writeln("      totalCalories: '" + (d['totalCal'] ?? '') + "',");
+    out.writeln("      totalProtein: '" + (d['totalProt'] ?? '') + "',");
     out.writeln("      mainCourse: const [" + (d['mainCourse'] as List).join(', ') + "],");
     out.writeln("    ),");
   }
@@ -184,5 +219,5 @@ void main() {
   out.writeln("}");
   
   outputFile.writeAsStringSync(out.toString());
-  print("menu_data.dart generated successfully with NO string interpolations!");
+  print("menu_data.dart generated with protein data successfully!");
 }
