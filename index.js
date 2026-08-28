@@ -1,8 +1,11 @@
 const express = require('express');
 const http = require('http');
+const https = require('https');
 const { Server } = require('socket.io');
 
 const app = express();
+app.use(express.json());
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -13,6 +16,52 @@ const io = new Server(server, {
 // Kullanıcı durumları hafızada tutuluyor
 const connectedUsers = new Map();
 
+// OneSignal Push Notification Yapılandırması
+const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID || '74f25810-49aa-4dd1-938c-c30229368a63';
+const ONESIGNAL_REST_KEY = process.env.ONESIGNAL_REST_KEY || 'os_v2_app_otzfqecjvjg5de4mymbcsnukmonqgdbtkt5urbupftj4pnazuivy4g6blrfco6fmrqurdgvqpt7x26yg4fqvb65p7gls3m42ktckbnq';
+
+// OneSignal Bildirim Gönderme Yardımcısı
+async function sendOneSignalNotification(title, message, data = {}) {
+  try {
+    const payload = JSON.stringify({
+      app_id: ONESIGNAL_APP_ID,
+      headings: { tr: title, en: title },
+      contents: { tr: message, en: message },
+      included_segments: ['Total Subscriptions'],
+      data: data,
+    });
+
+    const options = {
+      hostname: 'onesignal.com',
+      path: '/api/v1/notifications',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'Authorization': `Basic ${ONESIGNAL_REST_KEY}`,
+      }
+    };
+
+    return new Promise((resolve) => {
+      const req = https.request(options, (res) => {
+        let responseData = '';
+        res.on('data', (d) => responseData += d);
+        res.on('end', () => {
+          console.log(`[OneSignal] Bildirim gönderildi: "${title}" -> Kod: ${res.statusCode}`);
+          resolve({ success: res.statusCode === 200, response: responseData });
+        });
+      });
+      req.on('error', (e) => {
+        console.error('[OneSignal Hata]:', e.message);
+        resolve({ success: false, error: e.message });
+      });
+      req.write(payload);
+      req.end();
+    });
+  } catch (err) {
+    console.error('[OneSignal Exception]:', err.message);
+  }
+}
+
 // Zorunlu Güncelleme API
 app.get('/version', (req, res) => {
   res.json({
@@ -22,12 +71,42 @@ app.get('/version', (req, res) => {
 });
 
 // -----------------------------------------------------------
-// İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ SERVİSİ (VesselFinder & AIS)
-// Koordinatlar: Lat: 36.72641° N, Lon: 36.18631° E (UN/LOCODE: TRIDM)
+// İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ SERVİSİ
 // -----------------------------------------------------------
 let cachedShipsData = null;
 let lastShipsFetchTime = 0;
 const CACHE_DURATION_MS = 1 * 60 * 1000;
+
+// Önceki rıhtımda olan gemilerin isim takibi (Giriş/Çıkış bildirimi için)
+let previousBerthedShipNames = new Set(['CHEMICAL EXPLORER', 'MV IONIC SPIRIT', 'GALA A', 'GOLDEN SHARK']);
+
+function checkShipChangesAndNotify(currentShipsList) {
+  const currentBerthedShips = currentShipsList.filter(s => s.kategori === 'Rihtimdaki' && s.miktar > 0);
+  const currentNames = new Set(currentBerthedShips.map(s => s.gemiAdi));
+
+  // 1. Yeni Yanaşan Gemiler -> Bildirim Gönder
+  for (const ship of currentBerthedShips) {
+    if (!previousBerthedShipNames.has(ship.gemiAdi)) {
+      console.log(`[Liman Bildirimi] 🚢 Yeni Gemi Yanaştı: ${ship.gemiAdi}`);
+      const title = `🚢 Yeni Gemi Yanaştı: ${ship.gemiAdi}`;
+      const msg = `"${ship.gemiAdi}" (${ship.gemiTipi}) İsdemir ${ship.iskeleNo} rıhtımına yanaştı. Yük: ${ship.yukCinsi} (${Number(ship.miktar).toLocaleString('tr-TR')} Ton)`;
+      sendOneSignalNotification(title, msg, { type: 'ship_arrival', ship: ship.gemiAdi });
+    }
+  }
+
+  // 2. Limandan Ayrılan Gemiler -> Bildirim Gönder
+  for (const prevName of previousBerthedShipNames) {
+    if (!currentNames.has(prevName)) {
+      console.log(`[Liman Bildirimi] ⚓ Gemi Limandan Ayrıldı: ${prevName}`);
+      const title = `⚓ Gemi Limandan Ayrıldı: ${prevName}`;
+      const msg = `"${prevName}" gemisi yük operasyonunu tamamlayarak İsdemir Limanı'ndan ayrıldı.`;
+      sendOneSignalNotification(title, msg, { type: 'ship_departure', ship: prevName });
+    }
+  }
+
+  // Listeyi güncelle
+  previousBerthedShipNames = currentNames;
+}
 
 async function fetchLiveIsdemirShips() {
   const now = Date.now();
@@ -169,7 +248,7 @@ async function fetchLiveIsdemirShips() {
       lastAisUpdate: new Date().toISOString()
     },
 
-    // 4. DEMİRDEKİ GEMİLER (İSDEMİR DEMİRLEME SAHASI)
+    // 4. DEMİRDEKİ GEMİLER
     {
       id: '7',
       kategori: 'Demirdeki',
@@ -258,6 +337,9 @@ async function fetchLiveIsdemirShips() {
     }
   ];
 
+  // Gemi değişikliklerini kontrol et ve gerekirse anında Push Notification at
+  checkShipChangesAndNotify(ships);
+
   cachedShipsData = {
     success: true,
     port: 'İsdemir (TRIDM)',
@@ -281,6 +363,16 @@ app.get('/api/ships/live', async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+});
+
+// Manuel Gemi Bildirimi Tetikleme API (Örn: Admin panelinden veya webhook ile)
+app.post('/api/ships/notify', async (req, res) => {
+  const { title, message, shipName, action } = req.body;
+  if (!title || !message) {
+    return res.status(400).json({ error: "title ve message zorunludur" });
+  }
+  const result = await sendOneSignalNotification(title, message, { shipName, action });
+  res.json({ success: true, result });
 });
 
 io.on('connection', (socket) => {
