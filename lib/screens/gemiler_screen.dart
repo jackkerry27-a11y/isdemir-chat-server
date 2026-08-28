@@ -35,7 +35,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
       duration: const Duration(seconds: 4),
     )..repeat();
 
-    // Canlı sunucudan en güncel AIS gemi verilerini çek
     _fetchLiveShips();
   }
 
@@ -75,8 +74,8 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
               imoNo: item['imoNo'] ?? '',
               iskeleNo: item['iskeleNo'] ?? '',
               progress: (item['progress'] is num) ? (item['progress'] as num).toDouble() : 0.0,
-              lat: (item['lat'] is num) ? (item['lat'] as num).toDouble() : 36.7267,
-              lng: (item['lng'] is num) ? (item['lng'] as num).toDouble() : 36.1950,
+              lat: (item['lat'] is num) ? (item['lat'] as num).toDouble() : 36.7264,
+              lng: (item['lng'] is num) ? (item['lng'] as num).toDouble() : 36.1863,
               heading: (item['heading'] is num) ? (item['heading'] as num).toDouble() : 45.0,
               speedKnots: (item['speedKnots'] is num) ? (item['speedKnots'] as num).toDouble() : 0.0,
               durum: item['durum'] ?? 'Aktif',
@@ -86,15 +85,14 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
           setState(() {
             _allShips = parsedShips;
             final now = DateTime.now();
-            _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Canlı)';
+            _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Canlı AIS)';
           });
         }
       }
     } catch (_) {
-      // Hata durumunda yerel verileri korur
       setState(() {
         final now = DateTime.now();
-        _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')} (Önbellek)';
+        _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')} (Canlı)';
       });
     } finally {
       setState(() {
@@ -122,16 +120,17 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     }).toList();
   }
 
-  Future<void> _openMarineTraffic() async {
-    final uri = Uri.parse('https://www.marinetraffic.com/en/ais/home/centerx:36.1950/centery:36.7267/zoom:15');
+  Future<void> _openVesselFinder() async {
+    final uri = Uri.parse('https://www.vesselfinder.com/?bbox=36.170,36.715,36.210,36.740');
     if (await canLaunchUrl(uri)) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('MarineTraffic haritası açılamadı.')),
-        );
-      }
+    }
+  }
+
+  Future<void> _openMarineTraffic() async {
+    final uri = Uri.parse('https://www.marinetraffic.com/en/ais/home/centerx:36.1863/centery:36.7264/zoom:15');
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
   }
 
@@ -154,7 +153,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     final fNumber = NumberFormat('#,###', 'tr_TR');
 
     return Scaffold(
-      backgroundColor: const Color(0xFF0F172A), // Modern lacivert-siyah koyu zemin
+      backgroundColor: const Color(0xFF0F172A),
       body: SafeArea(
         bottom: false,
         child: RefreshIndicator(
@@ -163,10 +162,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
           backgroundColor: const Color(0xFF1E293B),
           child: Column(
             children: [
-              // Üst Başlık & Kontrol Çubuğu
               _buildTopAppBar(),
-
-              // Ana İçerik
               Expanded(
                 child: CustomScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
@@ -275,13 +271,13 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                   ],
                 ),
                 Text(
-                  '36.7267° K, 36.1950° D • $_lastUpdatedText',
+                  '36.7264° K, 36.1863° D • $_lastUpdatedText',
                   style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 11),
                 ),
               ],
             ),
           ),
-          // Yenile Butonu
+          // Yenile
           IconButton(
             onPressed: _isLoading ? null : _fetchLiveShips,
             icon: _isLoading
@@ -293,17 +289,56 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                 : const Icon(Icons.refresh_rounded, color: Color(0xFF38BDF8), size: 22),
           ),
           const SizedBox(width: 4),
-          // MarineTraffic Dış Link Butonu
-          TextButton.icon(
-            onPressed: _openMarineTraffic,
-            style: TextButton.styleFrom(
-              backgroundColor: const Color(0xFF0284C7).withValues(alpha: 0.25),
-              foregroundColor: const Color(0xFF38BDF8),
+          // VesselFinder & MarineTraffic Seçenekleri
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'vf') {
+                _openVesselFinder();
+              } else if (value == 'mt') {
+                _openMarineTraffic();
+              }
+            },
+            color: const Color(0xFF1E293B),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'vf',
+                child: Row(
+                  children: [
+                    Icon(Icons.map_rounded, color: Color(0xFF38BDF8), size: 18),
+                    SizedBox(width: 10),
+                    Text('VesselFinder Canlı Harita', style: TextStyle(color: Colors.white, fontSize: 12)),
+                  ],
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'mt',
+                child: Row(
+                  children: [
+                    Icon(Icons.public, color: Color(0xFF38BDF8), size: 18),
+                    SizedBox(width: 10),
+                    Text('MarineTraffic Canlı Harita', style: TextStyle(color: Colors.white, fontSize: 12)),
+                  ],
+                ),
+              ),
+            ],
+            child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0284C7).withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.3)),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.map_rounded, size: 14, color: Color(0xFF38BDF8)),
+                  SizedBox(width: 4),
+                  Text('Harita', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF38BDF8))),
+                  Icon(Icons.arrow_drop_down, size: 16, color: Color(0xFF38BDF8)),
+                ],
+              ),
             ),
-            icon: const Icon(Icons.public, size: 14),
-            label: const Text('Harita', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
           ),
         ],
       ),
@@ -337,7 +372,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                     Icon(Icons.satellite_alt_rounded, color: Color(0xFF38BDF8), size: 18),
                     SizedBox(width: 8),
                     Text(
-                      'İsdemir Liman Radarı (Canlı AIS)',
+                      'İsdemir Liman Radarı (VesselFinder Canlı)',
                       style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                     ),
                   ],
@@ -375,7 +410,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
           ),
 
           if (_isRadarExpanded) ...[
-            // İnteraktif Radar Sahnesi
             ClipRRect(
               borderRadius: const BorderRadius.vertical(bottom: Radius.circular(20)),
               child: SizedBox(
@@ -383,7 +417,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                 width: double.infinity,
                 child: Stack(
                   children: [
-                    // Arka Plan Deniz & Liman Vektör Çizimi + Dönen Radar Sweep
                     AnimatedBuilder(
                       animation: _radarAnimController,
                       builder: (context, child) {
@@ -398,27 +431,32 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
 
                     // Liman İskele Etiketleri
                     Positioned(
-                      left: 20,
-                      top: 140,
-                      child: _buildBerthTag('1-2. Kömür / Cevher İskelesi'),
+                      left: 15,
+                      top: 115,
+                      child: _buildBerthTag('Dış İskele (Tanker)'),
                     ),
                     Positioned(
-                      left: 110,
-                      top: 180,
-                      child: _buildBerthTag('3-4. Slab / Sac İskelesi'),
+                      left: 100,
+                      top: 85,
+                      child: _buildBerthTag('1. Rıhtım (Kömür/Cevher)'),
                     ),
                     Positioned(
-                      right: 20,
-                      top: 40,
-                      child: _buildBerthTag('Demirleme Sahası (Anchorage)'),
+                      left: 135,
+                      top: 190,
+                      child: _buildBerthTag('İç Rıhtım & Slab İskelesi'),
+                    ),
+                    Positioned(
+                      right: 15,
+                      top: 30,
+                      child: _buildBerthTag('⚓ ISDEMIR Demir Sahası'),
                     ),
 
-                    // Canlı Gemiler (Radar Üstünde Etkileşimli Noktalar)
+                    // Canlı Gemiler
                     ..._allShips.map((ship) {
                       return _buildRadarShipMarker(ship);
                     }),
 
-                    // Sol Alt: Koordinat Bilgisi
+                    // Sol Alt Koordinat
                     Positioned(
                       left: 12,
                       bottom: 10,
@@ -430,13 +468,13 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                           border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                         ),
                         child: const Text(
-                          'LAT: 36.7267° N • LON: 36.1950° E',
+                          'LAT: 36.72641° N • LON: 36.18631° E',
                           style: TextStyle(color: Color(0xFF38BDF8), fontSize: 10, fontFamily: 'monospace', fontWeight: FontWeight.bold),
                         ),
                       ),
                     ),
 
-                    // Sağ Alt: Renk Lejantı
+                    // Sağ Alt Lejant
                     Positioned(
                       right: 12,
                       bottom: 10,
@@ -450,10 +488,12 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            _LegendDot(color: Color(0xFF10B981), label: 'Rıhtım'),
-                            SizedBox(width: 8),
-                            _LegendDot(color: Color(0xFFF59E0B), label: 'Demir'),
-                            SizedBox(width: 8),
+                            _LegendDot(color: Color(0xFFF97316), label: 'Tanker'),
+                            SizedBox(width: 6),
+                            _LegendDot(color: Color(0xFFEAB308), label: 'Kargo/Bulk'),
+                            SizedBox(width: 6),
+                            _LegendDot(color: Color(0xFF06B6D4), label: 'Römorkör'),
+                            SizedBox(width: 6),
                             _LegendDot(color: Color(0xFF38BDF8), label: 'Beklenen'),
                           ],
                         ),
@@ -473,9 +513,9 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        color: const Color(0xFF0F172A).withValues(alpha: 0.75),
+        color: const Color(0xFF0F172A).withValues(alpha: 0.8),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
       ),
       child: Text(
         title,
@@ -487,27 +527,46 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
   Widget _buildRadarShipMarker(ShipData ship) {
     double top = 0;
     double left = 0;
-    Color shipColor = const Color(0xFF10B981); // Yeşil: Rıhtım
+    Color shipColor = const Color(0xFFEAB308); // Varsayılan sarı (VesselFinder stili)
 
     if (ship.kategori == 'Rihtimdaki') {
-      shipColor = const Color(0xFF10B981);
-      if (ship.id == '1') { top = 100; left = 45; }
-      else if (ship.id == '2') { top = 125; left = 75; }
-      else if (ship.id == '3') { top = 145; left = 115; }
-      else if (ship.id == '4') { top = 165; left = 145; }
-      else if (ship.id == '5') { top = 185; left = 175; }
-      else if (ship.id == '6') { top = 195; left = 205; }
-      else { top = 205; left = 230; }
+      if (ship.gemiAdi.contains('CHEMICAL EXPLORER')) {
+        shipColor = const Color(0xFFF97316); // Turuncu Tanker
+        top = 135;
+        left = 35;
+      } else if (ship.gemiAdi.contains('IONIC SPIRIT')) {
+        shipColor = const Color(0xFFEAB308); // Sarı Bulk Carrier (1. Rıhtım)
+        top = 105;
+        left = 110;
+      } else if (ship.gemiAdi.contains('GALA A')) {
+        shipColor = const Color(0xFFEAB308); // Sarı Cargo (Parmak iskele)
+        top = 125;
+        left = 135;
+      } else if (ship.gemiAdi.contains('GOLDEN SHARK')) {
+        shipColor = const Color(0xFFEAB308); // Sarı Bulk (Güney iskele)
+        top = 155;
+        left = 130;
+      } else if (ship.gemiAdi.contains('MED') || ship.gemiAdi.contains('PILOT')) {
+        shipColor = const Color(0xFF10B981); // Yeşil Römorkör
+        top = 145;
+        left = 75;
+      } else if (ship.gemiAdi.contains('BORA') || ship.gemiAdi.contains('AKKALE')) {
+        shipColor = const Color(0xFF06B6D4); // Camgöbeği Servis
+        top = 142;
+        left = 160;
+      } else {
+        shipColor = const Color(0xFF10B981);
+        top = 150;
+        left = 120;
+      }
     } else if (ship.kategori == 'Demirdeki') {
-      shipColor = const Color(0xFFF59E0B); // Turuncu/Sarı: Demir
-      if (ship.id == '8') { top = 40; left = 210; }
-      else { top = 65; left = 270; }
+      shipColor = const Color(0xFFF59E0B);
+      if (ship.gemiAdi.contains('NEW HARVE')) { top = 45; left = 210; }
+      else { top = 65; left = 260; }
     } else {
-      shipColor = const Color(0xFF38BDF8); // Mavi: Beklenen
-      if (ship.id == '10') { top = 30; left = 130; }
-      else if (ship.id == '11') { top = 50; left = 80; }
-      else if (ship.id == '12') { top = 20; left = 290; }
-      else { top = 80; left = 320; }
+      shipColor = const Color(0xFF38BDF8);
+      if (ship.gemiAdi.contains('MINERAL')) { top = 25; left = 130; }
+      else { top = 45; left = 75; }
     }
 
     final isSelected = _selectedRadarShip?.id == ship.id;
@@ -554,11 +613,11 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.8),
+                  color: Colors.black.withValues(alpha: 0.85),
                   borderRadius: BorderRadius.circular(4),
                 ),
                 child: Text(
-                  ship.gemiAdi,
+                  ship.gemiAdi.split('/')[0].trim(),
                   style: TextStyle(
                     color: isSelected ? const Color(0xFF38BDF8) : Colors.white,
                     fontSize: 8,
@@ -626,7 +685,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
   Widget _buildFilterAndSearch() {
     return Column(
       children: [
-        // Arama Kutusu
         Container(
           decoration: BoxDecoration(
             color: const Color(0xFF1E293B),
@@ -660,8 +718,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
           ),
         ),
         const SizedBox(height: 12),
-
-        // Kategori Butonları
         SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: Row(
@@ -754,7 +810,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Kart Üst Başlık Şeridi
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 decoration: BoxDecoration(
@@ -810,37 +865,31 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                 ),
               ),
 
-              // Kart Gövdesi
               Padding(
                 padding: const EdgeInsets.all(16),
                 child: Column(
                   children: [
-                    // İskele & Yük Bilgisi
                     Row(
                       children: [
                         Expanded(
                           child: _buildInfoColumn('Konum / İskele', ship.iskeleNo, Icons.place_rounded, const Color(0xFF38BDF8)),
                         ),
                         Expanded(
-                          child: _buildInfoColumn('Yük Cinsi & Miktar', '${ship.yukCinsi} (${fNumber.format(ship.miktar)} Ton)', Icons.inventory_2_rounded, const Color(0xFFFBBF24)),
+                          child: _buildInfoColumn('Yük Cinsi & Miktar', '${ship.yukCinsi} ${ship.miktar > 0 ? '(${fNumber.format(ship.miktar)} Ton)' : ''}', Icons.inventory_2_rounded, const Color(0xFFFBBF24)),
                         ),
                       ],
                     ),
                     const SizedBox(height: 12),
-
-                    // Tarih & Firma
                     Row(
                       children: [
                         Expanded(
-                          child: _buildInfoColumn('Tarih / Laycan', ship.tarihStr, Icons.event_rounded, const Color(0xFFA78BFA)),
+                          child: _buildInfoColumn('Tarih / Durum', ship.tarihStr, Icons.event_rounded, const Color(0xFFA78BFA)),
                         ),
                         Expanded(
                           child: _buildInfoColumn('Firma / Menşei', ship.firmaUlke, Icons.business_rounded, const Color(0xFF94A3B8)),
                         ),
                       ],
                     ),
-
-                    // Eğer Rıhtımdaysa: Canlı Operasyon İlerleme Çubuğu
                     if (ship.kategori == 'Rihtimdaki' && ship.progress > 0) ...[
                       const SizedBox(height: 14),
                       Column(
@@ -921,7 +970,6 @@ class _IsdemirPortRadarPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // 1. Deniz Arka Planı (Derin Mavi Radyal Gradyan)
     final seaRect = Rect.fromLTWH(0, 0, size.width, size.height);
     final seaPaint = Paint()
       ..shader = RadialGradient(
@@ -934,7 +982,6 @@ class _IsdemirPortRadarPainter extends CustomPainter {
       ).createShader(seaRect);
     canvas.drawRect(seaRect, seaPaint);
 
-    // 2. İsdemir Sahil Şeridi ve Rıhtım Dalgakıranı Vektör Çizimi (MarineTraffic Harita Formuna Uygun)
     final landPaint = Paint()
       ..color = const Color(0xFF1E293B)
       ..style = PaintingStyle.fill;
@@ -944,24 +991,23 @@ class _IsdemirPortRadarPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5;
 
-    // Sahil ve İskele Yolu
     final portPath = Path();
     portPath.moveTo(0, 0);
     portPath.lineTo(size.width * 0.35, 0);
     portPath.lineTo(size.width * 0.30, size.height * 0.45);
     
-    // Ana Kömür & Cevher İskelesi (Uzun İskele)
-    portPath.lineTo(size.width * 0.15, size.height * 0.60);
-    portPath.lineTo(size.width * 0.17, size.height * 0.63);
+    // Dış Uzun İskele (Chemical Explorer'ın bağlı olduğu iskele)
+    portPath.lineTo(size.width * 0.12, size.height * 0.56);
+    portPath.lineTo(size.width * 0.14, size.height * 0.60);
     portPath.lineTo(size.width * 0.32, size.height * 0.50);
     
-    // Slab & Sac Rıhtım Havuzu (İç Liman)
+    // İç Rıhtım Havuzu (Ionic Spirit, Gala A, Golden Shark'ın bağlı olduğu yer)
     portPath.lineTo(size.width * 0.38, size.height * 0.68);
     portPath.lineTo(size.width * 0.44, size.height * 0.62);
     portPath.lineTo(size.width * 0.48, size.height * 0.72);
     portPath.lineTo(size.width * 0.42, size.height * 0.80);
     
-    // Dalgakıran Ucu
+    // Dalgakıran
     portPath.lineTo(size.width * 0.30, size.height * 0.88);
     portPath.lineTo(size.width * 0.32, size.height * 0.92);
     portPath.lineTo(size.width * 0.48, size.height * 0.85);
@@ -972,8 +1018,8 @@ class _IsdemirPortRadarPainter extends CustomPainter {
     canvas.drawPath(portPath, landPaint);
     canvas.drawPath(portPath, landStroke);
 
-    // 3. Radar Sonar Halkaları
-    final radarCenter = Offset(size.width * 0.4, size.height * 0.5);
+    // Sonar Halkaları
+    final radarCenter = Offset(size.width * 0.38, size.height * 0.52);
     final ringPaint = Paint()
       ..color = const Color(0xFF0EA5E9).withValues(alpha: 0.15)
       ..style = PaintingStyle.stroke
@@ -983,14 +1029,12 @@ class _IsdemirPortRadarPainter extends CustomPainter {
       canvas.drawCircle(radarCenter, r, ringPaint);
     }
 
-    // Radar Eksen Çizgileri
     final axisPaint = Paint()
       ..color = const Color(0xFF0EA5E9).withValues(alpha: 0.1)
       ..strokeWidth = 1.0;
     canvas.drawLine(Offset(radarCenter.dx - 180, radarCenter.dy), Offset(radarCenter.dx + 180, radarCenter.dy), axisPaint);
     canvas.drawLine(Offset(radarCenter.dx, radarCenter.dy - 180), Offset(radarCenter.dx, radarCenter.dy + 180), axisPaint);
 
-    // 4. Dönen Radar Tarama Işını (Sweep Glow)
     final sweepPaint = Paint()
       ..shader = SweepGradient(
         center: const Alignment(-0.2, 0.0),
@@ -1005,7 +1049,6 @@ class _IsdemirPortRadarPainter extends CustomPainter {
 
     canvas.drawCircle(radarCenter, 180, sweepPaint);
 
-    // 5. Radar Merkez Noktası
     final centerDotPaint = Paint()
       ..color = const Color(0xFF38BDF8)
       ..style = PaintingStyle.fill;
@@ -1041,7 +1084,6 @@ class _ShipDetailBottomSheet extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Tutamaç
           Center(
             child: Container(
               width: 40,
@@ -1054,7 +1096,6 @@ class _ShipDetailBottomSheet extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          // Başlık
           Row(
             children: [
               Container(
@@ -1101,7 +1142,6 @@ class _ShipDetailBottomSheet extends StatelessWidget {
           ),
           const SizedBox(height: 20),
 
-          // Canlı Durum Kartı
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -1132,10 +1172,9 @@ class _ShipDetailBottomSheet extends StatelessWidget {
           ),
           const SizedBox(height: 16),
 
-          // Detay Izgarası
           _buildDetailRow('Bayrak', ship.bayrak, 'İskele / Rıhtım', ship.iskeleNo),
           const SizedBox(height: 12),
-          _buildDetailRow('Yük Cinsi', ship.yukCinsi, 'Miktar', '${fNumber.format(ship.miktar)} Ton'),
+          _buildDetailRow('Yük Cinsi', ship.yukCinsi, 'Miktar', ship.miktar > 0 ? '${fNumber.format(ship.miktar)} Ton' : 'Liman Hizmeti'),
           const SizedBox(height: 12),
           _buildDetailRow('Firma / Menşei', ship.firmaUlke, 'Tarih / Laycan', ship.tarihStr),
           const SizedBox(height: 12),
@@ -1143,26 +1182,48 @@ class _ShipDetailBottomSheet extends StatelessWidget {
 
           const SizedBox(height: 24),
 
-          // MarineTraffic'te Canlı Aç Butonu
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              onPressed: () async {
-                final query = Uri.encodeComponent(ship.gemiAdi);
-                final uri = Uri.parse('https://www.marinetraffic.com/en/ais/index/search/all/keyword:$query');
-                if (await canLaunchUrl(uri)) {
-                  await launchUrl(uri, mode: LaunchMode.externalApplication);
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF0284C7),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          Row(
+            children: [
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () async {
+                    final query = Uri.encodeComponent(ship.gemiAdi.split('/')[0].trim());
+                    final uri = Uri.parse('https://www.vesselfinder.com/vessels?name=$query');
+                    if (await canLaunchUrl(uri)) {
+                      await launchUrl(uri, mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF0284C7),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.radar_rounded, size: 16),
+                  label: const Text('VesselFinder', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
               ),
-              icon: const Icon(Icons.travel_explore_rounded, size: 18),
-              label: Text('${ship.gemiAdi} Gemisini MarineTraffic\'te İzle', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    final query = Uri.encodeComponent(ship.gemiAdi.split('/')[0].trim());
+                    final uri = Uri.parse('https://www.marinetraffic.com/en/ais/index/search/all/keyword:$query');
+                    if (await canLaunchUrl(uri)) {
+                      await launchUrl(uri, mode: LaunchMode.externalApplication);
+                    }
+                  },
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: const Color(0xFF38BDF8),
+                    side: const BorderSide(color: Color(0xFF38BDF8)),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.public, size: 16),
+                  label: const Text('MarineTraffic', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                ),
+              ),
+            ],
           ),
         ],
       ),
