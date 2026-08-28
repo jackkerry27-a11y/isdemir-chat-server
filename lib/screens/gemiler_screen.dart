@@ -392,26 +392,26 @@ class _GemilerScreenState extends State<GemilerScreen> {
     final isTahliye = ship.islem == 'Tahliye';
 
     // Sol taraftaki fotoğraf ve rozet seçimi
-    String networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Chemical_tanker_Aligote.jpg/640px-Chemical_tanker_Aligote.jpg';
+    String networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_tanker.jpg';
     Color glowDotColor = const Color(0xFF10B981);
 
     if (ship.gemiAdi.contains('CHEMICAL EXPLORER')) {
-      networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/69/Stolt_Nielsen_chemical_tanker.jpg/640px-Stolt_Nielsen_chemical_tanker.jpg';
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_tanker.jpg';
       glowDotColor = const Color(0xFF10B981);
     } else if (ship.gemiAdi.contains('IONIC SPIRIT')) {
-      networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Bulk_carrier_Zheng_Zhi.jpg/640px-Bulk_carrier_Zheng_Zhi.jpg';
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_bulk.jpg';
       glowDotColor = const Color(0xFFF59E0B);
     } else if (ship.gemiAdi.contains('GALA A')) {
-      networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/BBC_Europe_%28ship%2C_2003%29.jpg/640px-BBC_Europe_%28ship%2C_2003%29.jpg';
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_cargo.jpg';
       glowDotColor = const Color(0xFF00E5FF);
     } else if (ship.gemiAdi.contains('GOLDEN SHARK')) {
-      networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/3/38/Bulk_carrier_Loch_Lomond.jpg/640px-Bulk_carrier_Loch_Lomond.jpg';
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_bulk.jpg';
       glowDotColor = const Color(0xFFEAB308);
     } else if (ship.gemiAdi.contains('MED ') || ship.gemiAdi.contains('KAPTAN')) {
-      networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/Tugboat_Bugsier_1.jpg/640px-Tugboat_Bugsier_1.jpg';
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_cargo.jpg';
       glowDotColor = const Color(0xFF06B6D4);
     } else {
-      networkImageUrl = 'https://upload.wikimedia.org/wikipedia/commons/thumb/1/1a/Bulk_carrier_Zheng_Zhi.jpg/640px-Bulk_carrier_Zheng_Zhi.jpg';
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_bulk.jpg';
       glowDotColor = const Color(0xFF10B981);
     }
 
