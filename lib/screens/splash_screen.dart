@@ -382,21 +382,8 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
   }
 
   Future<String> _getApkPath() async {
-    Directory? dir;
-    try {
-      if (Platform.isAndroid) {
-        final extDirs = await getExternalCacheDirectories();
-        if (extDirs != null && extDirs.isNotEmpty) {
-          dir = extDirs.first;
-        }
-      }
-    } catch (_) {}
-    try {
-      dir ??= await getApplicationDocumentsDirectory();
-    } catch (_) {
-      dir = await getTemporaryDirectory();
-    }
-    return '${dir.path}/isdemir_update.apk';
+    final dir = await getTemporaryDirectory();
+    return '${dir.path}/isdemir_update_v5.apk';
   }
 
   Future<void> _checkExistingApk() async {
@@ -439,29 +426,7 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
         return;
       }
 
-      final result = await OpenFilex.open(
-        path,
-        type: 'application/vnd.android.package-archive',
-      );
-
-      if (result.type != ResultType.done && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              result.type == ResultType.permissionDenied
-                  ? 'Bilinmeyen uygulamaları yükleme izni gerekiyor.'
-                  : 'Yükleme açılamadı: ${result.message}',
-            ),
-            duration: const Duration(seconds: 5),
-            backgroundColor: const Color(0xFFDC2626),
-            action: SnackBarAction(
-              label: 'Tarayıcıda Aç',
-              textColor: Colors.white,
-              onPressed: _openInBrowser,
-            ),
-          ),
-        );
-      }
+      await OpenFilex.open(path);
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
