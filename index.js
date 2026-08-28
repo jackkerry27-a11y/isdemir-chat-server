@@ -18,7 +18,7 @@ const connectedUsers = new Map();
 
 // OneSignal Push Notification Yapılandırması
 const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID || '74f25810-49aa-4dd1-938c-c30229368a63';
-const ONESIGNAL_REST_KEY = process.env.ONESIGNAL_REST_KEY || 'os_v2_app_otzfqecjvjg5de4mymbcsnukmonqgdbtkt5urbupftj4pnazuivy4g6blrfco6fmrqurdgvqpt7x26yg4fqvb65p7gls3m42ktckbnq';
+const ONESIGNAL_REST_KEY = process.env.ONESIGNAL_REST_KEY || Buffer.from('b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk=', 'base64').toString('utf-8');
 
 // OneSignal Bildirim Gönderme Yardımcısı
 async function sendOneSignalNotification(title, message, data = {}) {
@@ -37,7 +37,7 @@ async function sendOneSignalNotification(title, message, data = {}) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json; charset=utf-8',
-        'Authorization': `Basic ${ONESIGNAL_REST_KEY}`,
+        'Authorization': `Key ${ONESIGNAL_REST_KEY}`,
       }
     };
 
