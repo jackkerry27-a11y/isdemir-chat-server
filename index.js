@@ -14,11 +14,11 @@ const io = new Server(server, {
 // Map yap─▒s─▒: { userId: { socketId, isOnline, lastSeen, profileData } }
 const connectedUsers = new Map();
 
-// Zorunlu G├╝ncelleme (Force Update) i├ğin API
+// Zorunlu Güncelleme (Force Update) için API
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 4, // Uygulama s├╝r├╝m├╝ bu say─▒dan k├╝├ğ├╝kse g├╝ncellemeyi zorlar
-    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v4.0/app-release.apk" // Dogrudan GitHub Releases
+    latestVersion: 5, // Uygulama sürümü bu sayıdan küçükse güncellemeyi zorlar
+    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v5.0/app-release.apk" // Doğrudan GitHub Releases
   });
 });
 
@@ -28,7 +28,7 @@ io.on('connection', (socket) => {
   // 1. Kullan─▒c─▒ sisteme giri┼ş yapt─▒─ş─▒nda
   socket.on('user_connected', (userData) => {
     const userId = userData.userId;
-    
+
     connectedUsers.set(userId, {
       socketId: socket.id,
       isOnline: true,
@@ -43,7 +43,7 @@ io.on('connection', (socket) => {
   // 2. Mesaj g├Ânderme olay─▒
   socket.on('send_message', (messageData) => {
     console.log(`Mesaj: ${messageData.senderId} -> ${messageData.receiverId}: ${messageData.content}`);
-    
+
     // Mesaj─▒ g├Ânderenin kendisine de yank─▒la (kendi ekran─▒nda g├Ârebilmesi i├ğin ya da lokal id ile y├Ânetebilir)
     // Ama genelde client bunu kendisi halleder.
 
@@ -66,7 +66,7 @@ io.on('connection', (socket) => {
   // 4. Ba─şlant─▒ kesildi─şinde
   socket.on('disconnect', () => {
     console.log(`Ba─şlant─▒ koptu: ${socket.id}`);
-    
+
     let disconnectedUserId = null;
     for (const [userId, user] of connectedUsers.entries()) {
       if (user.socketId === socket.id) {
@@ -80,7 +80,7 @@ io.on('connection', (socket) => {
       user.isOnline = false;
       user.lastSeen = new Date();
       connectedUsers.set(disconnectedUserId, user);
-      
+
       console.log(`Kullan─▒c─▒ ├ğevrimd─▒┼ş─▒: ${user.name}`);
       io.emit('online_users_update', Array.from(connectedUsers.values()));
     }

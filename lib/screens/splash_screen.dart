@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
-import 'dart:math' as math;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
@@ -10,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:open_filex/open_filex.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:video_player/video_player.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/user_model.dart';
 import '../utils/app_config.dart';
 import '../utils/socket_service.dart';
@@ -356,138 +356,278 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
   bool isDownloaded = false;
   String? savedApkPath;
   double progress = 0.0;
+  int receivedBytes = 0;
+  int totalBytes = 0;
+  CancelToken? _cancelToken;
   VideoPlayerController? _videoController;
 
   @override
   void initState() {
     super.initState();
-    _videoController = VideoPlayerController.asset('assets/videos/game_video2.mp4')
-      ..initialize().then((_) {
-        if (!mounted) return;
-        _videoController?.setLooping(true);
-        _videoController?.play();
-        _videoController?.setVolume(1.0); // Ses: play() sonrası çağrılmalı
-        setState(() {});
-      });
+    _initVideo();
+    _checkExistingApk();
+  }
+
+  void _initVideo() {
+    try {
+      _videoController = VideoPlayerController.asset('assets/videos/game_video2.mp4')
+        ..initialize().then((_) {
+          if (!mounted) return;
+          _videoController?.setLooping(true);
+          _videoController?.play();
+          _videoController?.setVolume(1.0);
+          setState(() {});
+        }).catchError((_) {});
+    } catch (_) {}
+  }
+
+  Future<String> _getApkPath() async {
+    Directory? dir;
+    try {
+      if (Platform.isAndroid) {
+        final extDirs = await getExternalCacheDirectories();
+        if (extDirs != null && extDirs.isNotEmpty) {
+          dir = extDirs.first;
+        }
+      }
+    } catch (_) {}
+    try {
+      dir ??= await getApplicationDocumentsDirectory();
+    } catch (_) {
+      dir = await getTemporaryDirectory();
+    }
+    return '${dir.path}/isdemir_update.apk';
+  }
+
+  Future<void> _checkExistingApk() async {
+    try {
+      final path = await _getApkPath();
+      final file = File(path);
+      if (await file.exists()) {
+        final len = await file.length();
+        if (len > 30 * 1024 * 1024) { // 30MB+ valid APK
+          if (mounted) {
+            setState(() {
+              savedApkPath = path;
+              isDownloaded = true;
+              progress = 1.0;
+            });
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   @override
   void dispose() {
+    _cancelToken?.cancel();
     _videoController?.dispose();
     super.dispose();
   }
 
+  Future<void> _installApk(String path) async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) {
+        if (mounted) {
+          setState(() {
+            isDownloaded = false;
+            savedApkPath = null;
+          });
+        }
+        _startDownload();
+        return;
+      }
+
+      final result = await OpenFilex.open(
+        path,
+        type: 'application/vnd.android.package-archive',
+      );
+
+      if (result.type != ResultType.done && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              result.type == ResultType.permissionDenied
+                  ? 'Bilinmeyen uygulamaları yükleme izni gerekiyor.'
+                  : 'Yükleme açılamadı: ${result.message}',
+            ),
+            duration: const Duration(seconds: 5),
+            backgroundColor: const Color(0xFFDC2626),
+            action: SnackBarAction(
+              label: 'Tarayıcıda Aç',
+              textColor: Colors.white,
+              onPressed: _openInBrowser,
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Kurulum başlatılamadı. Tarayıcı ile indirebilirsiniz.'),
+            duration: const Duration(seconds: 5),
+            backgroundColor: const Color(0xFFDC2626),
+            action: SnackBarAction(
+              label: 'Tarayıcıda Aç',
+              textColor: Colors.white,
+              onPressed: _openInBrowser,
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _openInBrowser() async {
+    try {
+      final uri = Uri.parse(widget.downloadUrl);
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+      } else {
+        await launchUrl(uri);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Tarayıcı açılamadı: $e'),
+            backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
+  }
+
   void _startDownload() async {
+    final savePath = await _getApkPath();
+
     if (isDownloaded && savedApkPath != null) {
-      await OpenFilex.open(savedApkPath!);
-      return;
+      final file = File(savedApkPath!);
+      if (await file.exists() && await file.length() > 10 * 1024 * 1024) {
+        await _installApk(savedApkPath!);
+        return;
+      }
     }
 
     setState(() {
       isDownloading = true;
       progress = 0.0;
+      receivedBytes = 0;
+      totalBytes = 0;
     });
 
-    const int maxRetries = 3;
-    int attempt = 0;
+    _cancelToken = CancelToken();
 
-    while (attempt < maxRetries) {
-      attempt++;
-      try {
-        final dir = await getTemporaryDirectory();
-        final savePath = '${dir.path}/isdemir_update_new.apk';
+    try {
+      final file = File(savePath);
+      if (await file.exists()) {
+        await file.delete();
+      }
 
-        final file = File(savePath);
-        if (await file.exists()) {
-          await file.delete();
-        }
+      final dio = Dio();
+      dio.options = BaseOptions(
+        connectTimeout: const Duration(minutes: 2),
+        receiveTimeout: const Duration(minutes: 30),
+        sendTimeout: const Duration(minutes: 2),
+        followRedirects: true,
+        maxRedirects: 8,
+      );
 
-        final dio = Dio();
-        dio.options = BaseOptions(
-          connectTimeout: const Duration(seconds: 60),
-          receiveTimeout: const Duration(seconds: 120),
-          sendTimeout: const Duration(seconds: 30),
-        );
-
-        await dio.download(
-          widget.downloadUrl,
-          savePath,
-          onReceiveProgress: (received, total) {
-            if (total != -1 && mounted) {
-              setState(() {
-                progress = received / total;
-              });
-            }
-          },
-        );
-
-        savedApkPath = savePath;
-
-        if (mounted) {
-          setState(() {
-            isDownloading = false;
-            isDownloaded = true;
-          });
-        }
-
-        await OpenFilex.open(savePath);
-        return; // Başarılı, döngüden çık
-
-      } on DioException catch (e) {
-        final isLastAttempt = attempt >= maxRetries;
-        if (!isLastAttempt) {
-          // Kısa bekleme sonrası tekrar dene
-          await Future.delayed(Duration(seconds: attempt * 2));
-          continue;
-        }
-        if (mounted) {
-          setState(() {
-            isDownloading = false;
-            progress = 0.0;
-            isDownloaded = false;
-          });
-          String errorMsg;
-          if (e.type == DioExceptionType.connectionError ||
-              e.error is SocketException) {
-            errorMsg = 'Bağlantı hatası: İnternet bağlantınızı kontrol edin ve tekrar deneyin.';
-          } else if (e.type == DioExceptionType.connectionTimeout ||
-                     e.type == DioExceptionType.receiveTimeout) {
-            errorMsg = 'Bağlantı zaman aşımına uğradı. Lütfen tekrar deneyin.';
-          } else if (e.response?.statusCode != null) {
-            errorMsg = 'Sunucu hatası (${e.response!.statusCode}). Lütfen daha sonra tekrar deneyin.';
-          } else {
-            errorMsg = 'İndirme başarısız oldu. Lütfen tekrar deneyin.';
+      await dio.download(
+        widget.downloadUrl,
+        savePath,
+        cancelToken: _cancelToken,
+        deleteOnError: false,
+        onReceiveProgress: (received, total) {
+          if (mounted) {
+            setState(() {
+              receivedBytes = received;
+              totalBytes = total > 0 ? total : 0;
+              if (total > 0) {
+                progress = (received / total).clamp(0.0, 1.0);
+              }
+            });
           }
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text(errorMsg),
-              duration: const Duration(seconds: 5),
-              backgroundColor: const Color(0xFFDC2626),
+        },
+      );
+
+      savedApkPath = savePath;
+
+      if (mounted) {
+        setState(() {
+          isDownloading = false;
+          isDownloaded = true;
+          progress = 1.0;
+        });
+      }
+
+      await _installApk(savePath);
+
+    } on DioException catch (e) {
+      if (CancelToken.isCancel(e)) return;
+      if (mounted) {
+        setState(() {
+          isDownloading = false;
+          isDownloaded = false;
+        });
+        String errorMsg;
+        if (e.type == DioExceptionType.connectionError ||
+            e.error is SocketException) {
+          errorMsg = 'Bağlantı hatası: İnternet bağlantınızı kontrol edin.';
+        } else if (e.type == DioExceptionType.connectionTimeout ||
+                   e.type == DioExceptionType.receiveTimeout) {
+          errorMsg = 'Bağlantı zaman aşımına uğradı. Lütfen tekrar deneyin.';
+        } else {
+          errorMsg = 'İndirme tamamlanamadı. Tarayıcı ile indirmeyi deneyebilirsiniz.';
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMsg),
+            duration: const Duration(seconds: 6),
+            backgroundColor: const Color(0xFFDC2626),
+            action: SnackBarAction(
+              label: 'Tarayıcıda Aç',
+              textColor: Colors.white,
+              onPressed: _openInBrowser,
             ),
-          );
-        }
-      } catch (e) {
-        final isLastAttempt = attempt >= maxRetries;
-        if (!isLastAttempt) {
-          await Future.delayed(Duration(seconds: attempt * 2));
-          continue;
-        }
-        if (mounted) {
-          setState(() {
-            isDownloading = false;
-            progress = 0.0;
-            isDownloaded = false;
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: const Text('Beklenmeyen bir hata oluştu. Lütfen tekrar deneyin.'),
-              duration: const Duration(seconds: 5),
-              backgroundColor: const Color(0xFFDC2626),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isDownloading = false;
+          isDownloaded = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text('Beklenmeyen bir hata oluştu. Tarayıcı ile indirmeyi deneyebilirsiniz.'),
+            duration: const Duration(seconds: 6),
+            backgroundColor: const Color(0xFFDC2626),
+            action: SnackBarAction(
+              label: 'Tarayıcıda Aç',
+              textColor: Colors.white,
+              onPressed: _openInBrowser,
             ),
-          );
-        }
+          ),
+        );
       }
     }
+  }
+
+  String _getProgressString() {
+    if (totalBytes > 0) {
+      final receivedMB = (receivedBytes / (1024 * 1024)).toStringAsFixed(1);
+      final totalMB = (totalBytes / (1024 * 1024)).toStringAsFixed(1);
+      final percent = (progress * 100).toInt();
+      return '$receivedMB MB / $totalMB MB (%$percent)';
+    } else if (receivedBytes > 0) {
+      final receivedMB = (receivedBytes / (1024 * 1024)).toStringAsFixed(1);
+      return '$receivedMB MB indirildi...';
+    }
+    return 'İndirme hazırlanıyor...';
   }
 
   @override
@@ -495,17 +635,29 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
     return PopScope(
       canPop: false,
       child: AlertDialog(
-        title: const Text('Yeni Güncelleme', style: TextStyle(fontWeight: FontWeight.bold)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.system_update_rounded, color: Color(0xFFDC2626)),
+            SizedBox(width: 8),
+            Text('Yeni Güncelleme', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          ],
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Uygulamanın yeni bir sürümü mevcut. Kullanmaya devam etmek için lütfen güncelleyin.'),
-            const SizedBox(height: 20),
+            const Text(
+              'Uygulamanın yeni bir sürümü mevcut. Kesintisiz kullanım için lütfen güncelleyin.',
+              style: TextStyle(fontSize: 14, color: Colors.black87),
+            ),
+            const SizedBox(height: 16),
             if (_videoController != null && _videoController!.value.isInitialized)
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
                 child: SizedBox(
-                  height: 150,
+                  height: 140,
+                  width: double.infinity,
                   child: AspectRatio(
                     aspectRatio: _videoController!.value.aspectRatio,
                     child: VideoPlayer(_videoController!),
@@ -513,20 +665,80 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
                 ),
               ),
             if (isDownloading) ...[
-              const SizedBox(height: 20),
-              LinearProgressIndicator(value: progress, color: const Color(0xFFDC2626)),
-              const SizedBox(height: 10),
-              Text('İndiriliyor: ${(progress * 100).toInt()}%', style: const TextStyle(fontWeight: FontWeight.bold)),
-            ]
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: progress > 0 ? progress : null,
+                  color: const Color(0xFFDC2626),
+                  backgroundColor: Colors.grey.shade200,
+                  minHeight: 8,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Center(
+                child: Text(
+                  _getProgressString(),
+                  style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFFDC2626)),
+                ),
+              ),
+            ],
+            if (isDownloaded && !isDownloading) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'İndirme tamamlandı. Kurulumu başlatabilirsiniz.',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF065F46), fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ],
         ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         actions: [
-          if (!isDownloading)
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
-              onPressed: _startDownload,
-              child: Text(isDownloaded ? 'Kurulumu Başlat' : 'Şimdi Güncelle', style: const TextStyle(color: Colors.white)),
-            ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              TextButton.icon(
+                icon: const Icon(Icons.open_in_browser_rounded, size: 18),
+                label: const Text('Tarayıcıdan İndir', style: TextStyle(fontSize: 13)),
+                style: TextButton.styleFrom(foregroundColor: Colors.blueGrey.shade700),
+                onPressed: _openInBrowser,
+              ),
+              const SizedBox(width: 8),
+              ElevatedButton.icon(
+                icon: Icon(
+                  isDownloaded ? Icons.install_mobile_rounded : (isDownloading ? Icons.hourglass_top_rounded : Icons.download_rounded),
+                  size: 18,
+                  color: Colors.white,
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDownloaded ? const Color(0xFF10B981) : const Color(0xFFDC2626),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
+                onPressed: isDownloading ? null : _startDownload,
+                label: Text(
+                  isDownloaded ? 'Kurulumu Başlat' : (isDownloading ? 'İndiriliyor...' : 'Şimdi Güncelle'),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
     );
