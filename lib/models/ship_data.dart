@@ -1,6 +1,6 @@
 class ShipData {
   final String id;
-  final String kategori; // 'Rihtimdaki', 'Demirdeki', 'Beklenen'
+  final String kategori; // 'Rihtimdaki', 'Demirdeki', 'Beklenen', 'Ayrilan'
   final String gemiAdi;
   final String tarihStr;
   final String firmaUlke;
@@ -43,14 +43,61 @@ class ShipData {
     required this.durum,
   });
 
+  factory ShipData.fromJson(Map<String, dynamic> item) {
+    return ShipData(
+      id: item['id']?.toString() ?? '',
+      kategori: item['kategori'] ?? 'Rihtimdaki',
+      gemiAdi: item['gemiAdi'] ?? '',
+      tarihStr: item['tarihStr'] ?? '',
+      firmaUlke: item['firmaUlke'] ?? '',
+      yukCinsi: item['yukCinsi'] ?? '',
+      islem: item['islem'] ?? 'Tahliye',
+      miktar: item['miktar'] is int ? item['miktar'] : (int.tryParse(item['miktar'].toString()) ?? 0),
+      sortDate: DateTime.now(),
+      gemiTipi: item['gemiTipi'] ?? 'Bulk Carrier',
+      bayrak: item['bayrak'] ?? '🇹🇷 Türkiye',
+      imoNo: item['imoNo'] ?? '',
+      iskeleNo: item['iskeleNo'] ?? '',
+      progress: (item['progress'] is num) ? (item['progress'] as num).toDouble() : 0.0,
+      lat: (item['lat'] is num) ? (item['lat'] as num).toDouble() : 36.7264,
+      lng: (item['lng'] is num) ? (item['lng'] as num).toDouble() : 36.1863,
+      heading: (item['heading'] is num) ? (item['heading'] as num).toDouble() : 45.0,
+      speedKnots: (item['speedKnots'] is num) ? (item['speedKnots'] as num).toDouble() : 0.0,
+      durum: item['durum'] ?? 'Aktif',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'kategori': kategori,
+      'gemiAdi': gemiAdi,
+      'tarihStr': tarihStr,
+      'firmaUlke': firmaUlke,
+      'yukCinsi': yukCinsi,
+      'islem': islem,
+      'miktar': miktar,
+      'gemiTipi': gemiTipi,
+      'bayrak': bayrak,
+      'imoNo': imoNo,
+      'iskeleNo': iskeleNo,
+      'progress': progress,
+      'lat': lat,
+      'lng': lng,
+      'heading': heading,
+      'speedKnots': speedKnots,
+      'durum': durum,
+    };
+  }
+
   static List<ShipData> getAllShips() {
     return [
-      // 1. DIŞ UZUN İSKELEDEKİ GEMİ
+      // 1. DIŞ UZUN İSKELEDEKİ GEMİ (Kimyasal Tanker)
       ShipData(
         id: '1',
         kategori: 'Rihtimdaki',
         gemiAdi: 'CHEMICAL EXPLORER',
-        tarihStr: '28.08 (Canlı)',
+        tarihStr: 'Yanaşık (Canlı)',
         firmaUlke: 'Koppers / Singapur',
         yukCinsi: 'Katran / Kimyasal Sıvı',
         islem: 'Yukleme',
@@ -60,12 +107,12 @@ class ShipData {
         bayrak: '🇸🇬 Singapur',
         imoNo: 'IMO 9518290',
         iskeleNo: 'Dış Uzun İskele (Tanker Başı)',
-        progress: 0.80,
+        progress: 0.85,
         lat: 36.7264,
         lng: 36.1863,
         heading: 245.0,
         speedKnots: 0.0,
-        durum: 'Yanaşık / Yükleme Yapılıyor (%80)',
+        durum: 'Yanaşık / Yükleme Yapılıyor (%85)',
       ),
 
       // 2. İÇ RIHTIMLARDAKİ ANA GEMİLER
@@ -73,7 +120,7 @@ class ShipData {
         id: '2',
         kategori: 'Rihtimdaki',
         gemiAdi: 'MV IONIC SPIRIT',
-        tarihStr: '28.08 (Canlı)',
+        tarihStr: 'Yanaşık (Canlı)',
         firmaUlke: 'Milpa / Kolombiya',
         yukCinsi: 'Met. Kok Kömürü',
         islem: 'Tahliye',
@@ -83,18 +130,18 @@ class ShipData {
         bayrak: '🇲🇭 Marshall Adaları',
         imoNo: 'IMO 9514200',
         iskeleNo: '1. Rıhtım (Kuzey İskelesi)',
-        progress: 0.65,
+        progress: 0.70,
         lat: 36.7255,
         lng: 36.1952,
         heading: 45.0,
         speedKnots: 0.0,
-        durum: 'Yanaşık / Tahliye Ediliyor (%65)',
+        durum: 'Yanaşık / Tahliye Ediliyor (%70)',
       ),
       ShipData(
         id: '3',
         kategori: 'Rihtimdaki',
         gemiAdi: 'GALA A',
-        tarihStr: '28.08 (Canlı)',
+        tarihStr: 'Yanaşık (Canlı)',
         firmaUlke: 'Arel Shipping / Türkiye',
         yukCinsi: 'Genel Kargo / Sac',
         islem: 'Yukleme',
@@ -104,18 +151,18 @@ class ShipData {
         bayrak: '🇹🇷 Türkiye',
         imoNo: 'IMO 8822040',
         iskeleNo: 'İç Parmak İskele (Finger Quay)',
-        progress: 0.90,
+        progress: 0.95,
         lat: 36.7248,
         lng: 36.1960,
         heading: 45.0,
         speedKnots: 0.0,
-        durum: 'Yanaşık / Yükleme Yapılıyor (%90)',
+        durum: 'Yanaşık / Yükleme Tamamlanmak Üzere (%95)',
       ),
       ShipData(
         id: '4',
         kategori: 'Rihtimdaki',
         gemiAdi: 'GOLDEN SHARK',
-        tarihStr: '28.08 (Canlı)',
+        tarihStr: 'Yanaşık (Canlı)',
         firmaUlke: 'Uluslararası / Palau',
         yukCinsi: 'Dökme Yük',
         islem: 'Tahliye',
@@ -125,12 +172,12 @@ class ShipData {
         bayrak: '🇵🇼 Palau',
         imoNo: 'IMO 9151383',
         iskeleNo: 'Güney Rıhtımı (Slab / Sac İskelesi)',
-        progress: 0.50,
+        progress: 0.55,
         lat: 36.7238,
         lng: 36.1968,
         heading: 45.0,
         speedKnots: 0.0,
-        durum: 'Yanaşık / Tahliye Ediliyor (%50)',
+        durum: 'Yanaşık / Tahliye Ediliyor (%55)',
       ),
 
       // 3. LİMAN İÇİ RÖMORKÖR VE KILAVUZ FİLOSU
@@ -138,7 +185,7 @@ class ShipData {
         id: '5',
         kategori: 'Rihtimdaki',
         gemiAdi: 'MED XXIV / MED U',
-        tarihStr: '28.08 (Canlı)',
+        tarihStr: 'Liman İçi Nöbette',
         firmaUlke: 'İsdemir Römorkaj / Türkiye',
         yukCinsi: 'Liman Hizmetleri',
         islem: 'Yukleme',
@@ -159,7 +206,7 @@ class ShipData {
         id: '6',
         kategori: 'Rihtimdaki',
         gemiAdi: 'KAPTAN BORA EKSI / AKKALE',
-        tarihStr: '28.08 (Canlı)',
+        tarihStr: 'Liman İçi Nöbette',
         firmaUlke: 'İsdemir Kılavuzluk / Türkiye',
         yukCinsi: 'Kılavuzluk & Palamar',
         islem: 'Yukleme',
@@ -221,12 +268,12 @@ class ShipData {
         durum: 'Demirde Bekliyor',
       ),
 
-      // 5. BEKLENEN GEMİLER
+      // 5. YAKLAŞAN / BEKLENEN GEMİLER
       ShipData(
         id: '9',
         kategori: 'Beklenen',
         gemiAdi: 'MINERAL AJISAI',
-        tarihStr: '29.08 (ETA 06:00)',
+        tarihStr: 'Yaklaşıyor (ETA 45 dk)',
         firmaUlke: 'Vale / Brezilya',
         yukCinsi: 'Demir Cevheri',
         islem: 'Tahliye',
@@ -237,17 +284,17 @@ class ShipData {
         imoNo: 'IMO 9621004',
         iskeleNo: 'Planlanan: 1. Kömür İskelesi',
         progress: 0.0,
-        lat: 36.7600,
-        lng: 36.1400,
+        lat: 36.7520,
+        lng: 36.1550,
         heading: 135.0,
-        speedKnots: 11.4,
-        durum: 'İskenderun Körfezi Girişinde (11.4 kt)',
+        speedKnots: 8.5,
+        durum: 'Körfezde / İsdemir Limanına Yaklaşıyor (8.5 kt)',
       ),
       ShipData(
         id: '10',
         kategori: 'Beklenen',
         gemiAdi: 'GENCO VIGILANT',
-        tarihStr: '29.08 (ETA 14:30)',
+        tarihStr: 'Yolda (ETA ~3 Saat)',
         firmaUlke: 'Milpa / Kolombiya',
         yukCinsi: 'Met. Kok',
         islem: 'Tahliye',
@@ -258,11 +305,34 @@ class ShipData {
         imoNo: 'IMO 9712398',
         iskeleNo: 'Planlanan: 2. Rıhtım',
         progress: 0.0,
-        lat: 36.7750,
-        lng: 36.1200,
+        lat: 36.7850,
+        lng: 36.1100,
         heading: 142.0,
         speedKnots: 12.8,
-        durum: 'Seyir Halinde (12.8 kt)',
+        durum: 'İskenderun Körfezi Girişinde Seyirde (12.8 kt)',
+      ),
+
+      // 6. SON AYRILAN GEMİLER
+      ShipData(
+        id: '11',
+        kategori: 'Ayrilan',
+        gemiAdi: 'LADY MARIA',
+        tarihStr: 'Ayrıldı (Bugün 16:30)',
+        firmaUlke: 'Mediterranean / İtalya',
+        yukCinsi: 'Rulo Sac',
+        islem: 'Yukleme',
+        miktar: 14200,
+        sortDate: DateTime(2026, 8, 28),
+        gemiTipi: 'General Cargo',
+        bayrak: '🇵🇦 Panama',
+        imoNo: 'IMO 9481231',
+        iskeleNo: '3. Rıhtımından Ayrıldı',
+        progress: 1.0,
+        lat: 36.7100,
+        lng: 36.1200,
+        heading: 260.0,
+        speedKnots: 13.5,
+        durum: 'Limandan Ayrıldı / Akdeniz Açıklarında Seyirde (13.5 kt)',
       ),
     ];
   }

@@ -16,6 +16,8 @@ import '../utils/socket_service.dart';
 import 'register_screen.dart';
 import 'approval_screen.dart';
 import 'main_screen.dart';
+import 'package:shorebird_code_push/shorebird_code_push.dart';
+import 'package:restart_app/restart_app.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -99,6 +101,27 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     }
   }
 
+  Future<void> _checkShorebirdUpdate() async {
+    try {
+      final shorebirdUpdater = ShorebirdUpdater();
+      final status = await shorebirdUpdater.checkForUpdate();
+      
+      if (status == UpdateStatus.outdated) {
+        if (!mounted) return;
+        
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (context) => const _ShorebirdUpdateDialogWidget(),
+        );
+        throw Exception('Shorebird Update Required');
+      }
+    } catch (e) {
+      if (e.toString().contains('Shorebird Update Required')) rethrow;
+      print('Shorebird güncelleme kontrolü başarısız: $e');
+    }
+  }
+
   Future<void> _routeToNextScreen() async {
     // 1. Önce cihazda kayıtlı kullanıcı var mı kontrol et
     final user = await UserModel.load();
@@ -107,7 +130,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     await Future.delayed(const Duration(milliseconds: 1600));
     try {
       await _checkForceUpdate();
-    } catch (_) {}
+      await _checkShorebirdUpdate();
+    } catch (e) {
+      if (e.toString().contains('Force Update Required') || e.toString().contains('Shorebird Update Required')) {
+        return; // Beklemede kal, dialog ekranda
+      }
+    }
     
     if (!mounted) return;
 
@@ -724,6 +752,184 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
                 onPressed: isDownloading ? null : _startDownload,
                 label: Text(
                   isDownloaded ? 'Kurulumu Başlat' : (isDownloading ? 'İndiriliyor...' : 'Şimdi Güncelle'),
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ShorebirdUpdateDialogWidget extends StatefulWidget {
+  const _ShorebirdUpdateDialogWidget();
+
+  @override
+  State<_ShorebirdUpdateDialogWidget> createState() => _ShorebirdUpdateDialogWidgetState();
+}
+
+class _ShorebirdUpdateDialogWidgetState extends State<_ShorebirdUpdateDialogWidget> {
+  bool isDownloading = false;
+  bool isDownloaded = false;
+  VideoPlayerController? _videoController;
+
+  @override
+  void initState() {
+    super.initState();
+    _initVideo();
+  }
+
+  void _initVideo() {
+    try {
+      _videoController = VideoPlayerController.asset('assets/videos/game_video2.mp4')
+        ..initialize().then((_) {
+          if (!mounted) return;
+          _videoController?.setLooping(true);
+          _videoController?.play();
+          _videoController?.setVolume(1.0);
+          setState(() {});
+        }).catchError((_) {});
+    } catch (_) {}
+  }
+
+  @override
+  void dispose() {
+    _videoController?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startDownload() async {
+    setState(() {
+      isDownloading = true;
+    });
+
+    try {
+      final shorebirdUpdater = ShorebirdUpdater();
+      await shorebirdUpdater.update();
+
+      if (mounted) {
+        setState(() {
+          isDownloading = false;
+          isDownloaded = true;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          isDownloading = false;
+        });
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Yama indirilirken hata oluştu. Daha sonra tekrar denenecektir.'),
+            backgroundColor: Color(0xFFDC2626),
+          ),
+        );
+      }
+    }
+  }
+
+  void _restartApp() {
+    Restart.restartApp();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return PopScope(
+      canPop: false,
+      child: AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Row(
+          children: [
+            Icon(Icons.system_update_rounded, color: Color(0xFFDC2626)),
+            SizedBox(width: 8),
+            Text('Küçük Yama Güncellemesi', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Uygulama için küçük bir yama (patch) mevcut. Sadece saniyeler sürecek bu güncellemeyi alarak yeniliklere hemen erişebilirsiniz.',
+              style: TextStyle(fontSize: 14, color: Colors.black87),
+            ),
+            const SizedBox(height: 16),
+            if (_videoController != null && _videoController!.value.isInitialized)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  height: 140,
+                  width: double.infinity,
+                  child: AspectRatio(
+                    aspectRatio: _videoController!.value.aspectRatio,
+                    child: VideoPlayer(_videoController!),
+                  ),
+                ),
+              ),
+            if (isDownloading) ...[
+              const SizedBox(height: 16),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: const LinearProgressIndicator(
+                  color: Color(0xFFDC2626),
+                  backgroundColor: Color(0xFFF1F5F9),
+                  minHeight: 8,
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Center(
+                child: Text(
+                  'Arka planda yama indiriliyor...',
+                  style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Color(0xFFDC2626)),
+                ),
+              ),
+            ],
+            if (isDownloaded && !isDownloading) ...[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
+                ),
+                child: const Row(
+                  children: [
+                    Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Yama indirildi! Uygulamayı yeniden başlatarak kurabilirsiniz.',
+                        style: TextStyle(fontSize: 12, color: Color(0xFF065F46), fontWeight: FontWeight.w500),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        actions: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.end,
+            children: [
+              ElevatedButton.icon(
+                icon: Icon(
+                  isDownloaded ? Icons.refresh_rounded : (isDownloading ? Icons.hourglass_top_rounded : Icons.download_rounded),
+                  size: 18,
+                  color: Colors.white,
+                ),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: isDownloaded ? const Color(0xFF10B981) : const Color(0xFFDC2626),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                ),
+                onPressed: isDownloading ? null : (isDownloaded ? _restartApp : _startDownload),
+                label: Text(
+                  isDownloaded ? 'Yeniden Başlat' : (isDownloading ? 'İndiriliyor...' : 'Şimdi İndir'),
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                 ),
               ),

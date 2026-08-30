@@ -65,8 +65,8 @@ async function sendOneSignalNotification(title, message, data = {}) {
 // Zorunlu Güncelleme API
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 6,
-    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v6.0/app-release.apk"
+    latestVersion: 7,
+    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v7.0/app-release.apk"
   });
 });
 

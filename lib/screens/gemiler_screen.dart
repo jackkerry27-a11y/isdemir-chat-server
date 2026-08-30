@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import '../models/ship_data.dart';
+import '../utils/socket_service.dart';
 
 class GemilerScreen extends StatefulWidget {
   const GemilerScreen({super.key});
@@ -14,8 +16,10 @@ class GemilerScreen extends StatefulWidget {
 class _GemilerScreenState extends State<GemilerScreen> {
   List<ShipData> _allShips = [];
   String _searchQuery = '';
+  String _selectedCategory = 'Tümü'; // 'Tümü', 'Rihtimdaki', 'Demirdeki', 'Beklenen', 'Ayrilan'
   bool _isLoading = false;
-  String _lastUpdatedText = '18:19:49 (Canlı AIS)';
+  String _lastUpdatedText = 'Canlı AIS';
+  Timer? _refreshTimer;
 
   @override
   void initState() {
@@ -23,65 +27,75 @@ class _GemilerScreenState extends State<GemilerScreen> {
     _allShips = ShipData.getAllShips();
     _allShips.sort((a, b) => a.sortDate.compareTo(b.sortDate));
 
+    // İlk HTTP yüklemesi
     _fetchLiveShips();
+
+    // Socket.io Canlı Gemi Güncellemelerini Dinle
+    SocketService().onShipsUpdated = (shipList) {
+      if (mounted && shipList.isNotEmpty) {
+        _processReceivedShips(shipList);
+      }
+    };
+    SocketService().requestShipsUpdate();
+
+    // Her 20 saniyede bir otomatik tazeleyen yedek timer
+    _refreshTimer = Timer.periodic(const Duration(seconds: 20), (timer) {
+      if (mounted) {
+        _fetchLiveShips(silent: true);
+      }
+    });
   }
 
-  Future<void> _fetchLiveShips() async {
-    setState(() {
-      _isLoading = true;
-    });
+  @override
+  void dispose() {
+    _refreshTimer?.cancel();
+    SocketService().onShipsUpdated = null;
+    super.dispose();
+  }
+
+  void _processReceivedShips(List<dynamic> shipList) {
+    try {
+      final List<ShipData> parsed = shipList.map((item) => ShipData.fromJson(item as Map<String, dynamic>)).toList();
+      setState(() {
+        _allShips = parsed;
+        final now = DateTime.now();
+        _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Canlı AIS)';
+      });
+    } catch (e) {
+      debugPrint('Gemi verisi işleme hatası: $e');
+    }
+  }
+
+  Future<void> _fetchLiveShips({bool silent = false}) async {
+    if (!silent) {
+      setState(() {
+        _isLoading = true;
+      });
+    }
 
     try {
       final response = await http
           .get(Uri.parse('https://isdemir-chat-server.onrender.com/api/ships/live'))
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200) {
         final data = json.decode(utf8.decode(response.bodyBytes));
         if (data['success'] == true && data['ships'] != null) {
           final List<dynamic> shipList = data['ships'];
-          final List<ShipData> parsedShips = shipList.map((item) {
-            return ShipData(
-              id: item['id']?.toString() ?? '',
-              kategori: item['kategori'] ?? 'Rihtimdaki',
-              gemiAdi: item['gemiAdi'] ?? '',
-              tarihStr: item['tarihStr'] ?? '',
-              firmaUlke: item['firmaUlke'] ?? '',
-              yukCinsi: item['yukCinsi'] ?? '',
-              islem: item['islem'] ?? 'Tahliye',
-              miktar: item['miktar'] is int ? item['miktar'] : (int.tryParse(item['miktar'].toString()) ?? 0),
-              sortDate: DateTime.now(),
-              gemiTipi: item['gemiTipi'] ?? 'Bulk Carrier',
-              bayrak: item['bayrak'] ?? '🇹🇷 Türkiye',
-              imoNo: item['imoNo'] ?? '',
-              iskeleNo: item['iskeleNo'] ?? '',
-              progress: (item['progress'] is num) ? (item['progress'] as num).toDouble() : 0.0,
-              lat: (item['lat'] is num) ? (item['lat'] as num).toDouble() : 36.7264,
-              lng: (item['lng'] is num) ? (item['lng'] as num).toDouble() : 36.1863,
-              heading: (item['heading'] is num) ? (item['heading'] as num).toDouble() : 45.0,
-              speedKnots: (item['speedKnots'] is num) ? (item['speedKnots'] as num).toDouble() : 0.0,
-              durum: item['durum'] ?? 'Aktif',
-            );
-          }).toList();
-
           if (mounted) {
-            setState(() {
-              _allShips = parsedShips;
-              final now = DateTime.now();
-              _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Canlı AIS)';
-            });
+            _processReceivedShips(shipList);
           }
         }
       }
     } catch (_) {
-      if (mounted) {
+      if (mounted && !silent) {
+        final now = DateTime.now();
         setState(() {
-          final now = DateTime.now();
-          _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Canlı AIS)';
+          _lastUpdatedText = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')} (Çevrimdışı/Yedek)';
         });
       }
     } finally {
-      if (mounted) {
+      if (mounted && !silent) {
         setState(() {
           _isLoading = false;
         });
@@ -99,11 +113,14 @@ class _GemilerScreenState extends State<GemilerScreen> {
 
   List<ShipData> get _filteredShips {
     return _allShips.where((s) {
-      final matchesSearch = s.gemiAdi.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          s.firmaUlke.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          s.yukCinsi.toLowerCase().contains(_searchQuery.toLowerCase()) ||
-          s.iskeleNo.toLowerCase().contains(_searchQuery.toLowerCase());
-      return matchesSearch;
+      final matchesCategory = _selectedCategory == 'Tümü' || s.kategori == _selectedCategory;
+      final query = _searchQuery.toLowerCase();
+      final matchesSearch = s.gemiAdi.toLowerCase().contains(query) ||
+          s.firmaUlke.toLowerCase().contains(query) ||
+          s.yukCinsi.toLowerCase().contains(query) ||
+          s.iskeleNo.toLowerCase().contains(query) ||
+          s.durum.toLowerCase().contains(query);
+      return matchesCategory && matchesSearch;
     }).toList();
   }
 
@@ -121,6 +138,7 @@ class _GemilerScreenState extends State<GemilerScreen> {
     final rihtimCount = _getShipCount('Rihtimdaki');
     final demirCount = _getShipCount('Demirdeki');
     final beklenenCount = _getShipCount('Beklenen');
+    final ayrilanCount = _getShipCount('Ayrilan');
     final totalTon = _getTotalTonnage();
 
     final fNumber = NumberFormat('#,###', 'tr_TR');
@@ -130,7 +148,7 @@ class _GemilerScreenState extends State<GemilerScreen> {
       body: SafeArea(
         bottom: false,
         child: RefreshIndicator(
-          onRefresh: _fetchLiveShips,
+          onRefresh: () => _fetchLiveShips(silent: false),
           color: const Color(0xFF00E5FF),
           backgroundColor: const Color(0xFF0F1E36),
           child: Column(
@@ -143,15 +161,23 @@ class _GemilerScreenState extends State<GemilerScreen> {
                 child: CustomScrollView(
                   physics: const AlwaysScrollableScrollPhysics(),
                   slivers: [
-                    // 2. Liman İstatistik Şeridi (Rıhtımda, Demirde, Beklenen, Hacim)
+                    // 2. Liman İstatistik Şeridi (Rıhtımda, Demirde, Beklenen, Ayrılan, Hacim)
                     SliverToBoxAdapter(
                       child: Padding(
-                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 12),
-                        child: _buildPortStatsBar(rihtimCount, demirCount, beklenenCount, fNumber.format(totalTon)),
+                        padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+                        child: _buildPortStatsBar(rihtimCount, demirCount, beklenenCount, ayrilanCount, fNumber.format(totalTon)),
                       ),
                     ),
 
-                    // 3. Arama Çubuğu
+                    // 3. Kategori Filtre Butonları
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+                        child: _buildCategoryChips(rihtimCount, demirCount, beklenenCount, ayrilanCount),
+                      ),
+                    ),
+
+                    // 4. Arama Çubuğu
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
@@ -159,7 +185,7 @@ class _GemilerScreenState extends State<GemilerScreen> {
                       ),
                     ),
 
-                    // 4. Gemi Listesi
+                    // 5. Gemi Listesi
                     _filteredShips.isEmpty
                         ? SliverToBoxAdapter(
                             child: Container(
@@ -169,9 +195,11 @@ class _GemilerScreenState extends State<GemilerScreen> {
                                 children: [
                                   Icon(Icons.directions_boat_outlined, size: 56, color: Colors.white.withValues(alpha: 0.2)),
                                   const SizedBox(height: 12),
-                                  const Text(
-                                    'Gemi bulunamadı.',
-                                    style: TextStyle(color: Colors.white60, fontSize: 14),
+                                  Text(
+                                    _searchQuery.isNotEmpty
+                                        ? 'Aramanıza uygun gemi bulunamadı.'
+                                        : 'Bu kategoride gemi bulunmuyor.',
+                                    style: const TextStyle(color: Colors.white60, fontSize: 14),
                                   ),
                                 ],
                               ),
@@ -262,7 +290,7 @@ class _GemilerScreenState extends State<GemilerScreen> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Text(
-                            'CANLI',
+                            'CANLI AIS',
                             style: TextStyle(color: Color(0xFF34D399), fontSize: 9, fontWeight: FontWeight.w900),
                           ),
                           SizedBox(width: 3),
@@ -287,7 +315,7 @@ class _GemilerScreenState extends State<GemilerScreen> {
 
           // Yenile Butonu
           IconButton(
-            onPressed: _isLoading ? null : _fetchLiveShips,
+            onPressed: _isLoading ? null : () => _fetchLiveShips(silent: false),
             icon: _isLoading
                 ? const SizedBox(
                     width: 16,
@@ -304,11 +332,11 @@ class _GemilerScreenState extends State<GemilerScreen> {
   }
 
   // ----------------------------------------------------
-  // İSTATİSTİK ŞERİDİ (4 Metrik)
+  // İSTATİSTİK ŞERİDİ (5 Metrik)
   // ----------------------------------------------------
-  Widget _buildPortStatsBar(int rihtimCount, int demirCount, int beklenenCount, String totalTonStr) {
+  Widget _buildPortStatsBar(int rihtimCount, int demirCount, int beklenenCount, int ayrilanCount, String totalTonStr) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 8),
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 6),
       decoration: BoxDecoration(
         color: const Color(0xFF0B1424),
         borderRadius: BorderRadius.circular(16),
@@ -317,41 +345,115 @@ class _GemilerScreenState extends State<GemilerScreen> {
       child: Row(
         children: [
           Expanded(
-            child: _buildStatItem('Rıhtımda', '$rihtimCount', 'Gemi', const Color(0xFF10B981), Icons.location_on_rounded),
+            child: _buildStatItem('Rıhtımda', '$rihtimCount', 'Gemi', const Color(0xFF10B981), Icons.location_on_rounded, 'Rihtimdaki'),
           ),
-          Container(width: 1, height: 40, color: const Color(0xFF1E3A5F)),
+          Container(width: 1, height: 36, color: const Color(0xFF1E3A5F)),
           Expanded(
-            child: _buildStatItem('Demirde', '$demirCount', 'Gemi', const Color(0xFFF59E0B), Icons.anchor_rounded),
+            child: _buildStatItem('Demirde', '$demirCount', 'Gemi', const Color(0xFFF59E0B), Icons.anchor_rounded, 'Demirdeki'),
           ),
-          Container(width: 1, height: 40, color: const Color(0xFF1E3A5F)),
+          Container(width: 1, height: 36, color: const Color(0xFF1E3A5F)),
           Expanded(
-            child: _buildStatItem('Beklenen', '$beklenenCount', 'Gemi', const Color(0xFF00E5FF), Icons.access_time_filled_rounded),
+            child: _buildStatItem('Yaklaşan', '$beklenenCount', 'Gemi', const Color(0xFF00E5FF), Icons.directions_boat_rounded, 'Beklenen'),
           ),
-          Container(width: 1, height: 40, color: const Color(0xFF1E3A5F)),
+          Container(width: 1, height: 36, color: const Color(0xFF1E3A5F)),
           Expanded(
-            child: _buildStatItem('Hacim', '${(totalTonStr.split('.')[0])}k', 'Ton', const Color(0xFFA855F7), Icons.inventory_2_rounded),
+            child: _buildStatItem('Ayrılan', '$ayrilanCount', 'Gemi', const Color(0xFF94A3B8), Icons.sailing_rounded, 'Ayrilan'),
+          ),
+          Container(width: 1, height: 36, color: const Color(0xFF1E3A5F)),
+          Expanded(
+            child: _buildStatItem('Hacim', '${(totalTonStr.split('.')[0])}k', 'Ton', const Color(0xFFA855F7), Icons.inventory_2_rounded, 'Tümü'),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildStatItem(String label, String value, String unit, Color color, IconData icon) {
-    return Column(
-      children: [
-        Icon(icon, size: 16, color: color),
-        const SizedBox(height: 4),
-        Text(label, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10, fontWeight: FontWeight.w500)),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          style: TextStyle(color: color, fontSize: 16, fontWeight: FontWeight.w900),
+  Widget _buildStatItem(String label, String value, String unit, Color color, IconData icon, String categoryFilter) {
+    final isSelected = _selectedCategory == categoryFilter;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedCategory = (_selectedCategory == categoryFilter && categoryFilter != 'Tümü') ? 'Tümü' : categoryFilter;
+        });
+      },
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 2),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          color: isSelected ? color.withValues(alpha: 0.15) : Colors.transparent,
         ),
-        Text(
-          unit,
-          style: TextStyle(color: color.withValues(alpha: 0.7), fontSize: 9.5, fontWeight: FontWeight.bold),
+        child: Column(
+          children: [
+            Icon(icon, size: 15, color: color),
+            const SizedBox(height: 3),
+            Text(label, style: TextStyle(color: isSelected ? Colors.white : const Color(0xFF94A3B8), fontSize: 9.5, fontWeight: isSelected ? FontWeight.bold : FontWeight.w500)),
+            const SizedBox(height: 2),
+            Text(
+              value,
+              style: TextStyle(color: color, fontSize: 15, fontWeight: FontWeight.w900),
+            ),
+            Text(
+              unit,
+              style: TextStyle(color: color.withValues(alpha: 0.7), fontSize: 8.5, fontWeight: FontWeight.bold),
+            ),
+          ],
         ),
-      ],
+      ),
+    );
+  }
+
+  // ----------------------------------------------------
+  // KATEGORİ FİLTRE ÇİPLERİ
+  // ----------------------------------------------------
+  Widget _buildCategoryChips(int rihtim, int demir, int beklenen, int ayrilan) {
+    final categories = [
+      {'key': 'Tümü', 'label': 'Tüm Gemiler (${_allShips.length})', 'icon': Icons.all_inclusive_rounded, 'color': const Color(0xFF6366F1)},
+      {'key': 'Rihtimdaki', 'label': 'Rıhtımda ($rihtim)', 'icon': Icons.location_on_rounded, 'color': const Color(0xFF10B981)},
+      {'key': 'Demirdeki', 'label': 'Demirde ($demir)', 'icon': Icons.anchor_rounded, 'color': const Color(0xFFF59E0B)},
+      {'key': 'Beklenen', 'label': 'Yaklaşan ($beklenen)', 'icon': Icons.directions_boat_rounded, 'color': const Color(0xFF00E5FF)},
+      {'key': 'Ayrilan', 'label': 'Son Ayrılan ($ayrilan)', 'icon': Icons.sailing_rounded, 'color': const Color(0xFF94A3B8)},
+    ];
+
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
+      child: Row(
+        children: categories.map((cat) {
+          final isSelected = _selectedCategory == cat['key'];
+          final Color color = cat['color'] as Color;
+          return GestureDetector(
+            onTap: () => setState(() => _selectedCategory = cat['key'] as String),
+            child: Container(
+              margin: const EdgeInsets.only(right: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+              decoration: BoxDecoration(
+                color: isSelected ? color.withValues(alpha: 0.2) : const Color(0xFF0B1424),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: isSelected ? color : const Color(0xFF1E3A5F),
+                  width: isSelected ? 1.5 : 1.0,
+                ),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(cat['icon'] as IconData, size: 14, color: isSelected ? color : const Color(0xFF94A3B8)),
+                  const SizedBox(width: 6),
+                  Text(
+                    cat['label'] as String,
+                    style: TextStyle(
+                      color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+                      fontSize: 11.5,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }).toList(),
+      ),
     );
   }
 
@@ -369,7 +471,7 @@ class _GemilerScreenState extends State<GemilerScreen> {
         style: const TextStyle(color: Colors.white, fontSize: 13),
         onChanged: (val) => setState(() => _searchQuery = val),
         decoration: InputDecoration(
-          hintText: 'Gemi adı, yük cinsi, iskele veya ülke ara...',
+          hintText: 'Gemi adı, yük cinsi, iskele veya durum ara...',
           hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12.5),
           prefixIcon: const Icon(Icons.search_rounded, color: Color(0xFF00E5FF), size: 18),
           suffixIcon: _searchQuery.isNotEmpty
@@ -390,12 +492,18 @@ class _GemilerScreenState extends State<GemilerScreen> {
   // ----------------------------------------------------
   Widget _buildVesselCard(ShipData ship, NumberFormat fNumber) {
     final isTahliye = ship.islem == 'Tahliye';
+    final isAyrildi = ship.kategori == 'Ayrilan';
+    final isBeklenen = ship.kategori == 'Beklenen';
+    final isDemirde = ship.kategori == 'Demirdeki';
 
     // Sol taraftaki fotoğraf ve rozet seçimi
-    String networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_tanker.jpg';
+    String networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_bulk.jpg';
     Color glowDotColor = const Color(0xFF10B981);
 
-    if (ship.gemiAdi.contains('CHEMICAL EXPLORER')) {
+    if (isAyrildi) {
+      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_cargo.jpg';
+      glowDotColor = const Color(0xFF94A3B8);
+    } else if (ship.gemiAdi.contains('CHEMICAL EXPLORER')) {
       networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_tanker.jpg';
       glowDotColor = const Color(0xFF10B981);
     } else if (ship.gemiAdi.contains('IONIC SPIRIT')) {
@@ -410,9 +518,33 @@ class _GemilerScreenState extends State<GemilerScreen> {
     } else if (ship.gemiAdi.contains('MED ') || ship.gemiAdi.contains('KAPTAN')) {
       networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_cargo.jpg';
       glowDotColor = const Color(0xFF06B6D4);
-    } else {
-      networkImageUrl = 'https://raw.githubusercontent.com/jackkerry27-a11y/isdemir-chat-server/main/assets/images/vessel_bulk.jpg';
-      glowDotColor = const Color(0xFF10B981);
+    } else if (isBeklenen) {
+      glowDotColor = const Color(0xFF00E5FF);
+    } else if (isDemirde) {
+      glowDotColor = const Color(0xFFF59E0B);
+    }
+
+    // Durum Rozeti Metni ve Rengi
+    String badgeText = ship.islem.toUpperCase();
+    Color badgeBg = isTahliye ? const Color(0xFF7F1D1D).withValues(alpha: 0.6) : const Color(0xFF064E3B).withValues(alpha: 0.8);
+    Color badgeBorder = isTahliye ? const Color(0xFFDC2626).withValues(alpha: 0.6) : const Color(0xFF10B981).withValues(alpha: 0.6);
+    Color badgeFg = isTahliye ? const Color(0xFFFCA5A5) : const Color(0xFF6EE7B7);
+
+    if (isAyrildi) {
+      badgeText = 'AYRILDI';
+      badgeBg = const Color(0xFF334155).withValues(alpha: 0.7);
+      badgeBorder = const Color(0xFF64748B);
+      badgeFg = const Color(0xFFE2E8F0);
+    } else if (isBeklenen) {
+      badgeText = 'YAKLAŞIYOR';
+      badgeBg = const Color(0xFF0C4A6E).withValues(alpha: 0.7);
+      badgeBorder = const Color(0xFF0284C7);
+      badgeFg = const Color(0xFF7DD3FC);
+    } else if (isDemirde) {
+      badgeText = 'DEMİRDE';
+      badgeBg = const Color(0xFF78350F).withValues(alpha: 0.7);
+      badgeBorder = const Color(0xFFD97706);
+      badgeFg = const Color(0xFFFDE68A);
     }
 
     return GestureDetector(
@@ -422,7 +554,9 @@ class _GemilerScreenState extends State<GemilerScreen> {
         decoration: BoxDecoration(
           color: const Color(0xFF0B1424),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: const Color(0xFF1E3A5F)),
+          border: Border.all(
+            color: isAyrildi ? const Color(0xFF334155) : const Color(0xFF1E3A5F),
+          ),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withValues(alpha: 0.3),
@@ -517,19 +651,19 @@ class _GemilerScreenState extends State<GemilerScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        // Üst Satır: İkon + Gemi Adı + YÜKLEME/TAHLİYE Rozeti
+                        // Üst Satır: İkon + Gemi Adı + Durum Rozeti
                         Row(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Container(
                               padding: const EdgeInsets.all(5),
                               decoration: BoxDecoration(
-                                color: isTahliye ? const Color(0xFF7F1D1D).withValues(alpha: 0.4) : const Color(0xFF064E3B).withValues(alpha: 0.6),
+                                color: badgeBg,
                                 borderRadius: BorderRadius.circular(6),
                               ),
                               child: Icon(
-                                Icons.directions_boat_filled_rounded,
-                                color: isTahliye ? const Color(0xFFF87171) : const Color(0xFF34D399),
+                                isAyrildi ? Icons.sailing_rounded : Icons.directions_boat_filled_rounded,
+                                color: badgeFg,
                                 size: 14,
                               ),
                             ),
@@ -557,16 +691,14 @@ class _GemilerScreenState extends State<GemilerScreen> {
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
                               decoration: BoxDecoration(
-                                color: isTahliye ? const Color(0xFF7F1D1D).withValues(alpha: 0.6) : const Color(0xFF064E3B).withValues(alpha: 0.8),
+                                color: badgeBg,
                                 borderRadius: BorderRadius.circular(6),
-                                border: Border.all(
-                                  color: isTahliye ? const Color(0xFFDC2626).withValues(alpha: 0.6) : const Color(0xFF10B981).withValues(alpha: 0.6),
-                                ),
+                                border: Border.all(color: badgeBorder),
                               ),
                               child: Text(
-                                ship.islem.toUpperCase(),
+                                badgeText,
                                 style: TextStyle(
-                                  color: isTahliye ? const Color(0xFFFCA5A5) : const Color(0xFF6EE7B7),
+                                  color: badgeFg,
                                   fontSize: 9,
                                   fontWeight: FontWeight.w900,
                                 ),
@@ -583,9 +715,9 @@ class _GemilerScreenState extends State<GemilerScreen> {
                           children: [
                             Expanded(
                               child: _buildGridItem(
-                                icon: Icons.location_on_rounded,
-                                iconColor: const Color(0xFF00E5FF),
-                                title: 'KONUM / İSKELE',
+                                icon: isAyrildi ? Icons.sailing_rounded : Icons.location_on_rounded,
+                                iconColor: isAyrildi ? const Color(0xFF94A3B8) : const Color(0xFF00E5FF),
+                                title: isAyrildi ? 'ÇIKIŞ / MEVCUT KONUM' : 'KONUM / İSKELE',
                                 value: ship.iskeleNo,
                               ),
                             ),
@@ -594,8 +726,8 @@ class _GemilerScreenState extends State<GemilerScreen> {
                               child: _buildGridItem(
                                 icon: Icons.inventory_2_rounded,
                                 iconColor: const Color(0xFFF59E0B),
-                                title: 'YÜK CİNSİ & MİKTAR',
-                                value: '${ship.yukCinsi} ${ship.miktar > 0 ? '(${fNumber.format(ship.miktar)} Ton)' : ''}',
+                                title: 'YÜK & MİKTAR',
+                                value: '${ship.yukCinsi} ${ship.miktar > 0 ? '(${fNumber.format(ship.miktar)} T)' : ''}',
                               ),
                             ),
                           ],
@@ -606,19 +738,19 @@ class _GemilerScreenState extends State<GemilerScreen> {
                           children: [
                             Expanded(
                               child: _buildGridItem(
-                                icon: Icons.calendar_today_rounded,
+                                icon: Icons.schedule_rounded,
                                 iconColor: const Color(0xFFA855F7),
-                                title: 'TARİH / DURUM',
+                                title: isAyrildi ? 'AYRILMA ZAMANI' : 'TARİH / DURUM',
                                 value: ship.tarihStr,
                               ),
                             ),
                             const SizedBox(width: 6),
                             Expanded(
                               child: _buildGridItem(
-                                icon: Icons.business_rounded,
-                                iconColor: const Color(0xFF94A3B8),
-                                title: 'FİRMA / MENŞEİ',
-                                value: ship.firmaUlke,
+                                icon: Icons.speed_rounded,
+                                iconColor: const Color(0xFF34D399),
+                                title: 'CANLI AIS DURUMU',
+                                value: ship.durum.isNotEmpty ? ship.durum : (ship.speedKnots > 0 ? '${ship.speedKnots} kn Seyirde' : 'Yanaşık'),
                               ),
                             ),
                           ],
@@ -643,9 +775,12 @@ class _GemilerScreenState extends State<GemilerScreen> {
           children: [
             Icon(icon, size: 10, color: iconColor),
             const SizedBox(width: 3),
-            Text(
-              title,
-              style: const TextStyle(color: Color(0xFF64748B), fontSize: 8, fontWeight: FontWeight.bold),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(color: Color(0xFF64748B), fontSize: 8, fontWeight: FontWeight.bold),
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
           ],
         ),
@@ -672,6 +807,9 @@ class _ShipDetailBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isTahliye = ship.islem == 'Tahliye';
+    final isAyrildi = ship.kategori == 'Ayrilan';
+    final isBeklenen = ship.kategori == 'Beklenen';
+    final isDemirde = ship.kategori == 'Demirdeki';
     final fNumber = NumberFormat('#,###', 'tr_TR');
 
     return Container(
@@ -704,7 +842,11 @@ class _ShipDetailBottomSheet extends StatelessWidget {
                   color: const Color(0xFF0C2744),
                   borderRadius: BorderRadius.circular(14),
                 ),
-                child: const Icon(Icons.directions_boat_filled_rounded, color: Color(0xFF00E5FF), size: 28),
+                child: Icon(
+                  isAyrildi ? Icons.sailing_rounded : Icons.directions_boat_filled_rounded,
+                  color: const Color(0xFF00E5FF),
+                  size: 28,
+                ),
               ),
               const SizedBox(width: 14),
               Expanded(
@@ -726,13 +868,15 @@ class _ShipDetailBottomSheet extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                 decoration: BoxDecoration(
-                  color: isTahliye ? const Color(0xFF7F1D1D) : const Color(0xFF064E3B),
+                  color: isAyrildi
+                      ? const Color(0xFF334155)
+                      : (isTahliye ? const Color(0xFF7F1D1D) : const Color(0xFF064E3B)),
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Text(
-                  ship.islem.toUpperCase(),
-                  style: TextStyle(
-                    color: isTahliye ? const Color(0xFFFCA5A5) : const Color(0xFF6EE7B7),
+                  isAyrildi ? 'AYRILDI' : (isBeklenen ? 'YAKLAŞIYOR' : (isDemirde ? 'DEMİRDE' : ship.islem.toUpperCase())),
+                  style: const TextStyle(
+                    color: Colors.white,
                     fontSize: 11,
                     fontWeight: FontWeight.bold,
                   ),
@@ -742,6 +886,7 @@ class _ShipDetailBottomSheet extends StatelessWidget {
           ),
           const SizedBox(height: 20),
 
+          // Canlı AIS Konum ve Hız Kartı
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -757,26 +902,37 @@ class _ShipDetailBottomSheet extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('CANLI AIS KONUMU', style: TextStyle(color: Color(0xFF64748B), fontSize: 10, fontWeight: FontWeight.bold)),
+                      const Text('CANLI AIS TELEMETRİSİ', style: TextStyle(color: Color(0xFF64748B), fontSize: 10, fontWeight: FontWeight.bold)),
                       const SizedBox(height: 2),
                       Text('${ship.lat.toStringAsFixed(4)}° N, ${ship.lng.toStringAsFixed(4)}° E', style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                      if (ship.durum.isNotEmpty)
+                        Text(ship.durum, style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 11)),
                     ],
                   ),
                 ),
-                Text(
-                  '${ship.speedKnots} kn',
-                  style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 14, fontWeight: FontWeight.bold),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      '${ship.speedKnots} kn',
+                      style: const TextStyle(color: Color(0xFF00E5FF), fontSize: 15, fontWeight: FontWeight.bold),
+                    ),
+                    Text(
+                      'Pruva: ${ship.heading.round()}°',
+                      style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 10),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
           const SizedBox(height: 16),
 
-          _buildDetailRow('Bayrak', ship.bayrak, 'İskele / Rıhtım', ship.iskeleNo),
+          _buildDetailRow('Bayrak', ship.bayrak, isAyrildi ? 'Ayrılış Rıhtımı' : 'İskele / Rıhtım', ship.iskeleNo),
           const SizedBox(height: 12),
           _buildDetailRow('Yük Cinsi', ship.yukCinsi, 'Miktar', ship.miktar > 0 ? '${fNumber.format(ship.miktar)} Ton' : 'Liman Hizmeti'),
           const SizedBox(height: 12),
-          _buildDetailRow('Firma / Menşei', ship.firmaUlke, 'Tarih / Durum', ship.tarihStr),
+          _buildDetailRow('Firma / Menşei', ship.firmaUlke, 'Zaman / Durum', ship.tarihStr),
         ],
       ),
     );

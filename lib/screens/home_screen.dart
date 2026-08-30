@@ -47,6 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
         _weatherTitle = '${data.temperature.round()}°';
       });
     }
+    // Hava durumu ve deniz uyarı bildirimlerini kontrol et
+    WeatherService.checkAndTriggerWeatherNotification();
   }
 
   Future<List<Map<String, dynamic>>> _getCombinedNotifications() async {

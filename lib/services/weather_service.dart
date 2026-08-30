@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 class WeatherData {
   final double temperature;
@@ -45,14 +46,12 @@ class WeatherData {
   }
 
   String getIconPath() {
-    // We can map this to weather icons if needed, 
-    // or return a material icon representation string.
     return 'sunny';
   }
 }
 
 class WeatherService {
-  // Payas, Hatay coordinates
+  // Payas, Hatay koordinatları
   static const double lat = 36.7583;
   static const double lon = 36.2167;
   
@@ -60,9 +59,9 @@ class WeatherService {
   static DateTime? _lastFetchTime;
 
   static Future<WeatherData?> getCurrentWeather() async {
-    // Cache for 10 minutes to avoid hitting the API too often
+    // 5 dakikalık önbellek
     if (_cachedData != null && _lastFetchTime != null) {
-      if (DateTime.now().difference(_lastFetchTime!).inMinutes < 10) {
+      if (DateTime.now().difference(_lastFetchTime!).inMinutes < 5) {
         return _cachedData;
       }
     }
@@ -73,7 +72,6 @@ class WeatherService {
       
       final weatherResponse = await http.get(weatherUrl).timeout(const Duration(seconds: 5));
       
-      // Also fetch marine data for wave height
       double wHeight = 0.0;
       try {
         final marineResponse = await http.get(marineUrl).timeout(const Duration(seconds: 3));
@@ -126,7 +124,74 @@ class WeatherService {
       print('Weather API Error: $e');
     }
     
-    // Return cached data if available, even if expired, on error
     return _cachedData;
+  }
+
+  // Kritik hava ve deniz durumlarını push bildirim olarak gönderme motoru
+  static Future<void> checkAndTriggerWeatherNotification() async {
+    final weather = await getCurrentWeather();
+    if (weather == null) return;
+
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final nowMs = DateTime.now().millisecondsSinceEpoch;
+
+      // 1. Yağmur Uyarısı
+      if (weather.nextRainTime != null) {
+        final lastRainAlert = prefs.getInt('last_weather_rain_alert') ?? 0;
+        if (nowMs - lastRainAlert > 4 * 60 * 60 * 1000) {
+          final timeStr = "${weather.nextRainTime!.hour.toString().padLeft(2, '0')}:00";
+          final title = '🌧️ İsdemir Yağmur Uyarısı';
+          final msg = 'Saat $timeStr civarında Payas ve İsdemir Liman sahasında yağış bekleniyor. Açık saha ve vinç operasyonlarında tedbir alınız.';
+          await _sendPush(title, msg);
+          await prefs.setInt('last_weather_rain_alert', nowMs);
+        }
+      }
+
+      // 2. Deniz / Dalga Uyarısı
+      if (weather.waveHeight >= 1.0) {
+        final lastWaveAlert = prefs.getInt('last_weather_wave_alert') ?? 0;
+        if (nowMs - lastWaveAlert > 6 * 60 * 60 * 1000) {
+          final title = '⚠️ İsdemir Liman Dalga Uyarısı';
+          final msg = 'İsdemir açıklarında dalga boyu ${weather.waveHeight} metreye ulaştı. Rıhtım ve gemi yanaşma operasyonlarında dikkatli olunuz.';
+          await _sendPush(title, msg);
+          await prefs.setInt('last_weather_wave_alert', nowMs);
+        }
+      }
+    } catch (e) {
+      print('Hava durumu push bildirimi hatası: $e');
+    }
+  }
+
+  static Future<void> _sendPush(String title, String content) async {
+    // 1. Render sunucumuz üzerinden güvenli bildirim gönderimi
+    try {
+      await http.post(
+        Uri.parse('https://isdemir-chat-server.onrender.com/api/weather/notify'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'title': title,
+          'message': content,
+        }),
+      ).timeout(const Duration(seconds: 4));
+    } catch (_) {}
+
+    // 2. Yedek doğrudan OneSignal REST API
+    try {
+      final key = utf8.decode(base64.decode('b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk='));
+      await http.post(
+        Uri.parse('https://onesignal.com/api/v1/notifications'),
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Authorization': 'Key $key',
+        },
+        body: json.encode({
+          'app_id': '74f25810-49aa-4dd1-938c-c30229368a63',
+          'headings': {'en': title, 'tr': title},
+          'contents': {'en': content, 'tr': content},
+          'included_segments': ['Total Subscriptions'],
+        }),
+      ).timeout(const Duration(seconds: 4));
+    } catch (_) {}
   }
 }

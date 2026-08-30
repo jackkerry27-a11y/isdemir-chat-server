@@ -26,6 +26,10 @@ void main() async {
   OneSignal.Debug.setLogLevel(OSLogLevel.verbose);
   OneSignal.initialize("74f25810-49aa-4dd1-938c-c30229368a63");
   OneSignal.Notifications.requestPermission(true);
+  // Uygulama açıkken de üst bildirimlerin görünmesini sağla
+  OneSignal.Notifications.addForegroundWillDisplayListener((event) {
+    event.notification.display();
+  });
 
   runApp(const MyStarterApp());
 }

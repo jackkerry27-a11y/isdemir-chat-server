@@ -90,6 +90,9 @@ class _VehicleScreenState extends State<VehicleScreen> {
   final List<String> _cargoTypes = ['Kömür', 'Hurda', 'Rulo Sac', 'Kangal Demir', 'Kütük Demir', 'Diğer'];
 
   void _showAddVehicleModal() {
+    DateTime manualEntryTime = DateTime.now();
+    DateTime? manualExitTime;
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -97,7 +100,7 @@ class _VehicleScreenState extends State<VehicleScreen> {
       builder: (context) => StatefulBuilder(
         builder: (BuildContext context, StateSetter setModalState) {
           return Container(
-            height: MediaQuery.of(context).size.height * 0.5,
+            height: MediaQuery.of(context).size.height * 0.75,
             decoration: const BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
@@ -162,6 +165,55 @@ class _VehicleScreenState extends State<VehicleScreen> {
                       setState(() => _cargo = val!);
                     },
                   ),
+                  const SizedBox(height: 16),
+                  // Manuel Giriş Saati
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade400),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: ListTile(
+                      title: const Text('Giriş Saati (Opsiyonel)', style: TextStyle(fontSize: 14)),
+                      subtitle: Text(DateFormat('dd/MM/yyyy HH:mm').format(manualEntryTime)),
+                      trailing: const Icon(Icons.access_time),
+                      onTap: () async {
+                        final date = await showDatePicker(context: context, initialDate: manualEntryTime, firstDate: DateTime(2000), lastDate: DateTime(2100));
+                        if (date != null) {
+                          final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(manualEntryTime));
+                          if (time != null) {
+                            setModalState(() {
+                              manualEntryTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                            });
+                          }
+                        }
+                      },
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  // Manuel Çıkış Saati
+                  Container(
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.grey.shade400),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: ListTile(
+                      title: const Text('Çıkış Saati (Opsiyonel)', style: TextStyle(fontSize: 14)),
+                      subtitle: Text(manualExitTime != null ? DateFormat('dd/MM/yyyy HH:mm').format(manualExitTime!) : 'Belirtilmedi (İçeride)'),
+                      trailing: const Icon(Icons.access_time),
+                      onTap: () async {
+                        final initialDate = manualExitTime ?? manualEntryTime;
+                        final date = await showDatePicker(context: context, initialDate: initialDate, firstDate: DateTime(2000), lastDate: DateTime(2100));
+                        if (date != null) {
+                          final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initialDate));
+                          if (time != null) {
+                            setModalState(() {
+                              manualExitTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                            });
+                          }
+                        }
+                      },
+                    ),
+                  ),
                   const SizedBox(height: 32),
                   SizedBox(
                     width: double.infinity,
@@ -172,7 +224,8 @@ class _VehicleScreenState extends State<VehicleScreen> {
                             id: DateTime.now().millisecondsSinceEpoch.toString(),
                             destination: _destination,
                             cargoType: _cargo,
-                            entryTime: DateTime.now(),
+                            entryTime: manualEntryTime,
+                            exitTime: manualExitTime,
                           ));
                         });
                         _saveRecords();
@@ -202,12 +255,63 @@ class _VehicleScreenState extends State<VehicleScreen> {
   }
 
   void _markAsExited(VehicleRecord record) {
-    setState(() {
-      record.exitTime = DateTime.now();
-    });
-    _saveRecords();
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Araç çıkışı verildi.'), backgroundColor: Colors.orange),
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Çıkış İşlemi', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: const Text('Araç çıkış saatini nasıl belirlemek istersiniz?'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              final date = await showDatePicker(
+                context: context, 
+                initialDate: DateTime.now(), 
+                firstDate: record.entryTime, 
+                lastDate: DateTime(2100)
+              );
+              if (date != null) {
+                if (!mounted) return;
+                final time = await showTimePicker(
+                  context: context, 
+                  initialTime: TimeOfDay.now()
+                );
+                if (time != null) {
+                  setState(() {
+                    record.exitTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                  });
+                  _saveRecords();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Araç çıkışı manuel olarak kaydedildi.'), backgroundColor: Colors.orange),
+                    );
+                  }
+                }
+              }
+            },
+            child: const Text('Manuel Seç'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF59E0B),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: () {
+              Navigator.pop(context);
+              setState(() {
+                record.exitTime = DateTime.now();
+              });
+              _saveRecords();
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Araç çıkışı verildi.'), backgroundColor: Colors.orange),
+              );
+            },
+            child: const Text('Şimdi Çıkış Ver'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -245,13 +349,12 @@ class _VehicleScreenState extends State<VehicleScreen> {
     final checkSvg = '''<svg viewBox="0 0 24 24" width="24" height="24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z" fill="#0B2B6D"/></svg>''';
 
     pdf.addPage(
-      pw.Page(
+      pw.MultiPage(
         pageFormat: PdfPageFormat.a4,
         margin: const pw.EdgeInsets.all(32),
+        crossAxisAlignment: pw.CrossAxisAlignment.start,
         build: (pw.Context context) {
-          return pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.start,
-            children: [
+          return [
               // Header
               pw.Row(
                 crossAxisAlignment: pw.CrossAxisAlignment.center,
@@ -368,7 +471,7 @@ class _VehicleScreenState extends State<VehicleScreen> {
                 }).toList(),
               ),
               
-              pw.Spacer(),
+              pw.SizedBox(height: 40),
               
               // Footer
               pw.Container(
@@ -480,8 +583,7 @@ class _VehicleScreenState extends State<VehicleScreen> {
                   ),
                 ),
               ),
-            ],
-          );
+          ];
         },
       ),
     );

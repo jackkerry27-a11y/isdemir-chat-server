@@ -39,6 +39,7 @@ class SocketService {
   Function(List<dynamic>)? onOnlineUsersUpdated;
   Function(dynamic)? onMessageReceived;
   Function(dynamic)? onTypingStatusReceived;
+  Function(List<dynamic>)? onShipsUpdated;
 
   void connect(String userId, String name, String? avatarUrl) {
     currentUserId = userId;
@@ -56,6 +57,16 @@ class SocketService {
         'name': name,
         'avatarUrl': avatarUrl,
       });
+      socket!.emit('request_ships_update');
+    });
+
+    socket!.on('ships_update', (data) {
+      if (data != null && data['ships'] != null) {
+        final List<dynamic> shipList = data['ships'];
+        if (onShipsUpdated != null) {
+          onShipsUpdated!(shipList);
+        }
+      }
     });
 
     socket!.on('online_users_update', (data) {
@@ -127,6 +138,12 @@ class SocketService {
         'receiverId': receiverId,
         'isTyping': isTyping,
       });
+    }
+  }
+
+  void requestShipsUpdate() {
+    if (socket != null && socket!.connected) {
+      socket!.emit('request_ships_update');
     }
   }
 
