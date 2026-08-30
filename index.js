@@ -372,17 +372,41 @@ function getShipsPayload() {
 // -----------------------------------------------------------
 // CANLI GEMİ TRAFİK DÖNGÜSÜ & ANLIK PUSH BİLDİRİM MOTORU
 // -----------------------------------------------------------
+const { scrapeVesselFinder } = require('./vesselfinder_scraper');
+
 let simulationTick = 0;
 
-async function processShipTrafficSimulation() {
+async function updateLiveShips() {
   simulationTick++;
   const now = new Date();
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
+  console.log(`[Sunucu] Gerçek zamanlı gemi verisi çekiliyor... (${timeStr})`);
+  
+  try {
+      const scrapedShips = await scrapeVesselFinder();
+      if (scrapedShips && scrapedShips.length > 0) {
+          // Gerçek veriler geldi, canlı listeyi bunlarla güncelle
+          // Ancak mevcut simüle ilerleme yüzdelerini (progress) korumak için eşleştir
+          scrapedShips.forEach(newShip => {
+              const existing = liveShipsList.find(s => s.gemiAdi === newShip.name || s.id === newShip.mmsi);
+              if (existing) {
+                  existing.lat = newShip.lat || existing.lat;
+                  existing.lng = newShip.lon || existing.lng;
+                  existing.speedKnots = newShip.sog || existing.speedKnots;
+                  existing.heading = newShip.cog || existing.heading;
+                  existing.lastAisUpdate = now.toISOString();
+              }
+          });
+      }
+  } catch (error) {
+      console.log(`[Sunucu] Scraper hatası (Cloudflare engeli vs.), simülasyona devam ediliyor...`);
+  }
+
+  // Simülasyon döngüsü (Gemi progress ilerletme ve bildirim atma)
   for (const ship of liveShipsList) {
     ship.lastAisUpdate = now.toISOString();
 
-    // 1. YAKLAŞAN GEMİLERİ KONTROL ET VE BİLDİRİM GÖNDER
     if (ship.kategori === 'Beklenen') {
       if (!ship.notifiedApproaching) {
         ship.notifiedApproaching = true;
@@ -393,17 +417,13 @@ async function processShipTrafficSimulation() {
       }
     }
 
-    // 2. RIHTIMDAKİ GEMİLERİN OPERASYONUNU İLERLET
     if (ship.kategori === 'Rihtimdaki' && ship.miktar > 0) {
-      // Yavaş yavaş operasyonu ilerlet (%95 üzeri olanlar tamamlanıp ayrılsın)
       if (ship.progress < 1.0) {
         ship.progress = Math.min(1.0, Math.round((ship.progress + 0.01) * 100) / 100);
         ship.durum = `Yanaşık / ${ship.islem == 'Tahliye' ? 'Tahliye' : 'Yükleme'} Yapılıyor (%${Math.round(ship.progress * 100)})`;
       }
 
-      // Eğer operasyon %100 olduysa ve henüz ayrılmadıysa -> AYRILMA SÜRECİNİ BAŞLAT
       if (ship.progress >= 1.0 && !ship.notifiedDeparture && ship.id === '3') {
-        // Gala A gemisi yüklemeyi bitirip ayrılsın simülasyonu
         ship.kategori = 'Ayrilan';
         ship.tarihStr = `Ayrıldı (Bugün ${timeStr})`;
         ship.durum = `Limandan Ayrıldı / Akdeniz Açıklarında Seyirde (11.2 kt)`;
@@ -424,8 +444,10 @@ async function processShipTrafficSimulation() {
   io.emit('ships_update', getShipsPayload());
 }
 
-// Her 30 saniyede bir gemi durumlarını kontrol et ve canlı güncellemeleri yayınla
-setInterval(processShipTrafficSimulation, 30 * 1000);
+// Render.com üzerinde IP banı yememek için 5 dakikada (300.000 ms) bir çalıştır
+setInterval(updateLiveShips, 5 * 60 * 1000);
+// İlk başlangıçta 10 saniye sonra çalıştır
+setTimeout(updateLiveShips, 10000);
 
 // Canlı Gemi API Endpoint'i
 app.get('/api/ships/live', (req, res) => {
