@@ -2,9 +2,19 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const { Server } = require('socket.io');
+const cors = require('cors');
+const dotenv = require('dotenv');
+const multer = require('multer');
+const { GoogleGenAI } = require('@google/genai');
+
+dotenv.config();
 
 const app = express();
+app.use(cors());
 app.use(express.json());
+
+// Bellekte tutmak için multer ayarı
+const upload = multer({ storage: multer.memoryStorage() });
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -670,6 +680,87 @@ io.on('connection', (socket) => {
       io.emit('online_users_update', Array.from(connectedUsers.values()));
     }
   });
+});
+
+// -----------------------------------------------------------
+// ADMIN AI MAP UPLOAD
+// -----------------------------------------------------------
+app.post('/api/ships/admin/upload-map', upload.single('map_image'), async (req, res) => {
+  const password = req.body.password;
+  if (password !== '4896281aa') {
+    return res.status(401).json({ success: false, error: 'Yetkisiz erişim.' });
+  }
+
+  if (!req.file) {
+    return res.status(400).json({ success: false, error: 'Resim yüklenmedi.' });
+  }
+
+  if (!process.env.GEMINI_API_KEY) {
+    return res.status(500).json({ success: false, error: 'Sunucuda GEMINI_API_KEY eksik.' });
+  }
+
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+    
+    // Resmi base64 formatına çevir
+    const base64Image = req.file.buffer.toString('base64');
+    
+    // Gemini'ye sor
+    const prompt = `Sen gemi isimleri çıkartan uzman bir sistemisin. 
+Bu ekte verilen gemi takip haritası (VesselFinder) görüntüsündeki BÜTÜN gemi isimlerini (sarı ve yeşil noktaların yanındaki siyah yazılar) bul.
+SADECE JSON formatında bir liste döndür. Örneğin: ["CHEMICAL EXPLORER", "MED XXIV", "MV IONIC SPIRIT"].
+Hiçbir ek açıklama yapma, sadece JSON formatını döndür.`;
+
+    const response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash',
+      contents: [
+        {
+          role: 'user',
+          parts: [
+            { text: prompt },
+            {
+              inlineData: {
+                data: base64Image,
+                mimeType: req.file.mimetype
+              }
+            }
+          ]
+        }
+      ]
+    });
+
+    const aiText = response.text;
+    console.log("[AI Upload] Gemini Yanıtı:", aiText);
+
+    // AI yanıtı genellikle "```json\n [...]\n```" şeklinde gelir, ayıkla
+    let jsonStr = aiText.replace(/```json/g, '').replace(/```/g, '').trim();
+    const extractedShips = JSON.parse(jsonStr);
+
+    if (!Array.isArray(extractedShips)) {
+      throw new Error("AI geçerli bir dizi (array) döndürmedi.");
+    }
+
+    // Haritadan çekilen gemilere göre sistemi güncelle
+    let updatedCount = 0;
+    extractedShips.forEach(shipName => {
+        // Gemiyi listemizde bul (büyük/küçük harf duyarsız)
+        const ship = liveShipsList.find(s => s.gemiAdi.toUpperCase() === shipName.toUpperCase());
+        if (ship) {
+            ship.lastAisUpdate = new Date().toISOString();
+            updatedCount++;
+        }
+    });
+
+    // İsteğe bağlı: Ekranda gözükmeyen gemileri listeden silmek/gizlemek de buraya eklenebilir.
+
+    // Herkesi güncelle
+    io.emit('ships_update', getShipsPayload());
+
+    res.json({ success: true, message: `${extractedShips.length} gemi bulundu, ${updatedCount} gemi güncellendi.`, ships: extractedShips });
+  } catch (err) {
+    console.error('[AI Upload Hatası]', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 const PORT = process.env.PORT || 3000;

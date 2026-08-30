@@ -12,12 +12,16 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@google/genai": "^2.19.0",
     "@sparticuz/chromium": "^149.0.0",
+    "cloudscraper": "^4.6.0",
     "express": "^5.2.1",
+    "multer": "^2.3.0",
     "puppeteer": "^25.9.0",
     "puppeteer-core": "^25.9.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "tesseract.js": "^7.0.0"
   }
 }
