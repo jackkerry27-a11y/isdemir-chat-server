@@ -746,16 +746,10 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
         ),
         actionsPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
         actions: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.end,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              TextButton.icon(
-                icon: const Icon(Icons.open_in_browser_rounded, size: 18),
-                label: const Text('Tarayıcıdan İndir', style: TextStyle(fontSize: 13)),
-                style: TextButton.styleFrom(foregroundColor: Colors.blueGrey.shade700),
-                onPressed: _openInBrowser,
-              ),
-              const SizedBox(width: 8),
               ElevatedButton.icon(
                 icon: Icon(
                   isDownloaded ? Icons.install_mobile_rounded : (isDownloading ? Icons.hourglass_top_rounded : Icons.download_rounded),
@@ -772,6 +766,13 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
                   isDownloaded ? 'Kurulumu Başlat' : (isDownloading ? 'İndiriliyor...' : 'Şimdi Güncelle'),
                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                 ),
+              ),
+              const SizedBox(height: 8),
+              TextButton.icon(
+                icon: const Icon(Icons.open_in_browser_rounded, size: 18),
+                label: const Text('Tarayıcıdan İndir', style: TextStyle(fontSize: 13)),
+                style: TextButton.styleFrom(foregroundColor: Colors.blueGrey),
+                onPressed: _openInBrowser,
               ),
             ],
           ),
