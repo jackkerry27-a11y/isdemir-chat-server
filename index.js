@@ -377,7 +377,7 @@ let simulationTick = 0;
 async function processShipTrafficSimulation() {
   simulationTick++;
   const now = new Date();
-  const timeStr = `${now.getHours().toString().padLeft(2, '0')}:${now.getMinutes().toString().padLeft(2, '0')}`;
+  const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
   for (const ship of liveShipsList) {
     ship.lastAisUpdate = now.toISOString();
