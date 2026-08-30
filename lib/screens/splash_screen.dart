@@ -76,50 +76,62 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     _routeToNextScreen();
   }
 
-  Future<void> _checkForceUpdate() async {
+  Future<bool> _checkForceUpdate() async {
     try {
-      final response = await http.get(Uri.parse('${SocketService.serverUrl}/version')).timeout(const Duration(seconds: 5));
+      final response = await http.get(
+        Uri.parse('${SocketService.serverUrl}/version'),
+        headers: {
+          'User-Agent': 'IsdemirOS-Mobile/1.0',
+          'Accept': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 10));
+      
+      print('[UPDATE] HTTP Status: ${response.statusCode}');
+      print('[UPDATE] Body: ${response.body}');
+      
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         final latestVersion = data['latestVersion'] as int;
         final downloadUrl = data['downloadUrl'] as String;
+        
+        print('[UPDATE] Server version: $latestVersion, App version: ${AppConfig.currentVersion}');
 
         if (latestVersion > AppConfig.currentVersion) {
-          if (!mounted) return;
+          if (!mounted) return false;
           
           showDialog(
             context: context,
             barrierDismissible: false,
             builder: (context) => _UpdateDialogWidget(downloadUrl: downloadUrl),
           );
-          throw Exception('Force Update Required');
+          return true; // Halt navigation
         }
       }
     } catch (e) {
-      if (e.toString().contains('Force Update Required')) rethrow;
-      print('Versiyon kontrolü başarısız: $e');
+      print('[UPDATE] Versiyon kontrolü başarısız: $e');
     }
+    return false;
   }
 
-  Future<void> _checkShorebirdUpdate() async {
+  Future<bool> _checkShorebirdUpdate() async {
     try {
       final shorebirdUpdater = ShorebirdUpdater();
       final status = await shorebirdUpdater.checkForUpdate();
       
       if (status == UpdateStatus.outdated) {
-        if (!mounted) return;
+        if (!mounted) return false;
         
         showDialog(
           context: context,
           barrierDismissible: false,
           builder: (context) => const _ShorebirdUpdateDialogWidget(),
         );
-        throw Exception('Shorebird Update Required');
+        return true; // Halt navigation
       }
     } catch (e) {
-      if (e.toString().contains('Shorebird Update Required')) rethrow;
       print('Shorebird güncelleme kontrolü başarısız: $e');
     }
+    return false;
   }
 
   Future<void> _routeToNextScreen() async {
@@ -128,13 +140,19 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     
     // Kısa ve zarif bir splash bekleme süresi
     await Future.delayed(const Duration(milliseconds: 1600));
+    
+    bool shouldHalt = false;
     try {
-      await _checkForceUpdate();
-      await _checkShorebirdUpdate();
-    } catch (e) {
-      if (e.toString().contains('Force Update Required') || e.toString().contains('Shorebird Update Required')) {
-        return; // Beklemede kal, dialog ekranda
+      shouldHalt = await _checkForceUpdate();
+      if (!shouldHalt) {
+        shouldHalt = await _checkShorebirdUpdate();
       }
+    } catch (e) {
+      print("Güncelleme kontrolü sırasında beklenmeyen hata: $e");
+    }
+    
+    if (shouldHalt) {
+      return; // Beklemede kal, dialog ekranda
     }
     
     if (!mounted) return;
