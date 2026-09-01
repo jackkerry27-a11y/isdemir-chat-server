@@ -75,8 +75,8 @@ async function sendOneSignalNotification(title, message, data = {}) {
 // Zorunlu Güncelleme API
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 7,
-    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v7.0/app-release.apk"
+    latestVersion: 8,
+    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v8.0/app-release.apk"
   });
 });
 
@@ -447,7 +447,8 @@ async function updateLiveShips() {
         console.log(`[Liman Bildirimi] 🚢 Gemi Yaklaşıyor: ${ship.gemiAdi}`);
         const title = `🚢 Gemi Yaklaşıyor: ${ship.gemiAdi}`;
         const msg = `"${ship.gemiAdi}" (${ship.gemiTipi}) İsdemir Limanı'na yaklaşıyor. Yük: ${ship.yukCinsi} (${Number(ship.miktar).toLocaleString('tr-TR')} Ton), ${ship.tarihStr}`;
-        sendOneSignalNotification(title, msg, { type: 'ship_approaching', ship: ship.gemiAdi });
+        // Sürekli geldiği için geçici olarak kapatıldı
+        // sendOneSignalNotification(title, msg, { type: 'ship_approaching', ship: ship.gemiAdi });
       }
     }
 
