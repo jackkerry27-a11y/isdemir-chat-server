@@ -236,7 +236,7 @@ let liveShipsList = [
     notifiedDeparture: false
   },
 
-// 4. İÇ LİMAN RÖMORKÖR VE KILAVUZ FİLOSU (Ekran görüntüsündeki güncel gemiler)
+  // 4. İÇ LİMAN RÖMORKÖR VE KILAVUZ FİLOSU (Ekran görüntüsündeki güncel gemiler)
   {
     id: '7',
     kategori: 'Rihtimdaki',
@@ -416,41 +416,32 @@ async function updateLiveShips() {
   const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
 
   console.log(`[Sunucu] Gerçek zamanlı gemi verisi çekiliyor... (${timeStr})`);
-  
+
   try {
-      const scrapedShips = await scrapeVesselFinder();
-      if (scrapedShips && scrapedShips.length > 0) {
-          // Gerçek veriler geldi, canlı listeyi bunlarla güncelle
-          // Ancak mevcut simüle ilerleme yüzdelerini (progress) korumak için eşleştir
-          scrapedShips.forEach(newShip => {
-              const existing = liveShipsList.find(s => s.gemiAdi === newShip.name || s.id === newShip.mmsi);
-              if (existing) {
-                  existing.lat = newShip.lat || existing.lat;
-                  existing.lng = newShip.lon || existing.lng;
-                  existing.speedKnots = newShip.sog || existing.speedKnots;
-                  existing.heading = newShip.cog || existing.heading;
-                  existing.lastAisUpdate = now.toISOString();
-              }
-          });
-      }
+    const scrapedShips = await scrapeVesselFinder();
+    if (scrapedShips && scrapedShips.length > 0) {
+      // Gerçek veriler geldi, canlı listeyi bunlarla güncelle
+      // Ancak mevcut simüle ilerleme yüzdelerini (progress) korumak için eşleştir
+      scrapedShips.forEach(newShip => {
+        const existing = liveShipsList.find(s => s.gemiAdi === newShip.name || s.id === newShip.mmsi);
+        if (existing) {
+          existing.lat = newShip.lat || existing.lat;
+          existing.lng = newShip.lon || existing.lng;
+          existing.speedKnots = newShip.sog || existing.speedKnots;
+          existing.heading = newShip.cog || existing.heading;
+          existing.lastAisUpdate = now.toISOString();
+        }
+      });
+    }
   } catch (error) {
-      console.log(`[Sunucu] Scraper hatası (Cloudflare engeli vs.), simülasyona devam ediliyor...`);
+    console.log(`[Sunucu] Scraper hatası (Cloudflare engeli vs.), simülasyona devam ediliyor...`);
   }
 
   // Simülasyon döngüsü (Gemi progress ilerletme ve bildirim atma)
   for (const ship of liveShipsList) {
     ship.lastAisUpdate = now.toISOString();
 
-    if (ship.kategori === 'Beklenen') {
-      if (!ship.notifiedApproaching) {
-        ship.notifiedApproaching = true;
-        console.log(`[Liman Bildirimi] 🚢 Gemi Yaklaşıyor: ${ship.gemiAdi}`);
-        const title = `🚢 Gemi Yaklaşıyor: ${ship.gemiAdi}`;
-        const msg = `"${ship.gemiAdi}" (${ship.gemiTipi}) İsdemir Limanı'na yaklaşıyor. Yük: ${ship.yukCinsi} (${Number(ship.miktar).toLocaleString('tr-TR')} Ton), ${ship.tarihStr}`;
-        // Sürekli geldiği için geçici olarak kapatıldı
-        // sendOneSignalNotification(title, msg, { type: 'ship_approaching', ship: ship.gemiAdi });
-      }
-    }
+
 
     if (ship.kategori === 'Rihtimdaki' && ship.miktar > 0) {
       if (ship.progress < 1.0) {
@@ -623,6 +614,31 @@ app.post('/api/weather/notify', async (req, res) => {
 });
 
 // -----------------------------------------------------------
+// TELSİZ / WALKIE-TALKIE GLOBAL KANAL HAFIZASI & FONKSİYONLAR
+// -----------------------------------------------------------
+const radioChannels = new Map(); // channelId -> Map(userId -> userData)
+let lastRadioNotificationTime = 0;
+
+function getRadioUsers(channelId) {
+  const chStr = String(channelId || '1');
+  if (!radioChannels.has(chStr)) return [];
+  return Array.from(radioChannels.get(chStr).values());
+}
+
+// Telsiz Kanal Durumları API (Kontrol & İzleme)
+app.get('/api/radio/status', (req, res) => {
+  const channels = {};
+  for (const [chId, usersMap] of radioChannels.entries()) {
+    channels[chId] = Array.from(usersMap.values());
+  }
+  res.json({
+    success: true,
+    totalChannels: radioChannels.size,
+    channels
+  });
+});
+
+// -----------------------------------------------------------
 // SOCKET.IO GERÇEK ZAMANLI BAĞLANTI VE SOHBET
 // -----------------------------------------------------------
 io.on('connection', (socket) => {
@@ -664,12 +680,142 @@ io.on('connection', (socket) => {
     socket.emit('ships_update', getShipsPayload());
   });
 
+  // -----------------------------------------------------------
+  // TELSİZ / WALKIE-TALKIE OLAYLARI
+  // -----------------------------------------------------------
+  socket.on('radio_join', ({ userId, name, jobTitle, avatarUrl, channel = '1' }) => {
+    const chStr = String(channel || '1');
+
+    // Kullanıcı önceden başka bir kanaldaysa o kanaldan güvenle çıkar
+    for (const [existingCh, chUsers] of radioChannels.entries()) {
+      if (existingCh !== chStr) {
+        let changed = false;
+        for (const [uid, rUser] of chUsers.entries()) {
+          if (uid === userId || rUser.socketId === socket.id) {
+            chUsers.delete(uid);
+            socket.leave(`radio_${existingCh}`);
+            changed = true;
+          }
+        }
+        if (changed) {
+          io.to(`radio_${existingCh}`).emit('radio_users_update', {
+            channel: existingCh,
+            users: getRadioUsers(existingCh)
+          });
+        }
+      }
+    }
+
+    if (!radioChannels.has(chStr)) {
+      radioChannels.set(chStr, new Map());
+    }
+    const channelUsers = radioChannels.get(chStr);
+    channelUsers.set(userId, {
+      userId,
+      socketId: socket.id,
+      name: name || 'Taktik Personel',
+      jobTitle: jobTitle || 'Saha',
+      avatarUrl: avatarUrl || null,
+      joinedAt: new Date().toISOString(),
+    });
+
+    socket.join(`radio_${chStr}`);
+    console.log(`[Telsiz] 📻 ${name} (${userId}) Kanal ${chStr}'e katıldı. (Bu kanaldaki toplam: ${channelUsers.size})`);
+    
+    // Kanaldaki TÜM kullanıcılara güncel katılımcı listesini yayınla
+    io.to(`radio_${chStr}`).emit('radio_users_update', {
+      channel: chStr,
+      users: getRadioUsers(chStr)
+    });
+  });
+
+  // Manuel kullanıcı listesi talebi (Frekans listesi yenileme)
+  socket.on('radio_get_users', ({ channel = '1' } = {}) => {
+    const chStr = String(channel || '1');
+    socket.emit('radio_users_update', {
+      channel: chStr,
+      users: getRadioUsers(chStr)
+    });
+  });
+
+  socket.on('radio_leave', ({ userId, channel = '1' }) => {
+    const chStr = String(channel || '1');
+    if (radioChannels.has(chStr)) {
+      radioChannels.get(chStr).delete(userId);
+      socket.leave(`radio_${chStr}`);
+      console.log(`[Telsiz] 📻 ${userId} Kanal ${chStr}'den ayrıldı.`);
+      io.to(`radio_${chStr}`).emit('radio_users_update', {
+        channel: chStr,
+        users: getRadioUsers(chStr)
+      });
+    }
+  });
+
+  socket.on('radio_start_talk', ({ userId, name, channel = '1' }) => {
+    const chStr = String(channel || '1');
+    console.log(`[Telsiz] 🎙️ ${name} mandalla konuşmaya başladı (Kanal: ${chStr})`);
+    socket.to(`radio_${chStr}`).emit('radio_incoming_talk', {
+      userId,
+      name,
+      channel: chStr
+    });
+
+    // Uygulama kapalı olanlara veya odada olmayanlara OneSignal bildirimi gönder (1 dakikada maks 1 bildirim)
+    const nowMs = Date.now();
+    if (nowMs - lastRadioNotificationTime > 60000) {
+      lastRadioNotificationTime = nowMs;
+      sendOneSignalNotification(
+        `📻 [TAKTİK TELSİZ] ${name} anons geçiyor...`,
+        `🔊 Bas-Konuş kanalında canlı anons var. Dinlemek için dokunun.`,
+        { type: 'telsiz_channel', channel: chStr }
+      );
+    }
+  });
+
+  socket.on('radio_audio_chunk', ({ userId, name, channel = '1', audioBase64 }) => {
+    if (!audioBase64) return;
+    const chStr = String(channel || '1');
+    socket.to(`radio_${chStr}`).emit('radio_audio_broadcast', {
+      userId,
+      name,
+      channel: chStr,
+      audioBase64
+    });
+  });
+
+  socket.on('radio_end_talk', ({ userId, name, channel = '1' }) => {
+    const chStr = String(channel || '1');
+    console.log(`[Telsiz] 🔇 ${name} konuşmayı bitirdi (Roger Beep)`);
+    socket.to(`radio_${chStr}`).emit('radio_talk_ended', {
+      userId,
+      name,
+      channel: chStr
+    });
+  });
+
   socket.on('disconnect', () => {
     let disconnectedUserId = null;
     for (const [userId, user] of connectedUsers.entries()) {
       if (user.socketId === socket.id) {
         disconnectedUserId = userId;
         break;
+      }
+    }
+
+    // Telsiz kanallarından da temizle
+    for (const [channelId, channelUsers] of radioChannels.entries()) {
+      let changed = false;
+      for (const [uid, rUser] of channelUsers.entries()) {
+        if (rUser.socketId === socket.id) {
+          channelUsers.delete(uid);
+          changed = true;
+        }
+      }
+      if (changed) {
+        io.to(`radio_${channelId}`).emit('radio_users_update', {
+          channel: channelId,
+          users: getRadioUsers(channelId)
+        });
       }
     }
 
@@ -702,10 +848,10 @@ app.post('/api/ships/admin/upload-map', upload.single('map_image'), async (req, 
 
   try {
     const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    
+
     // Resmi base64 formatına çevir
     const base64Image = req.file.buffer.toString('base64');
-    
+
     // Gemini'ye sor
     const prompt = `Sen gemi isimleri çıkartan uzman bir sistemisin. 
 Bu ekte verilen gemi takip haritası (VesselFinder) görüntüsündeki BÜTÜN gemi isimlerini (sarı ve yeşil noktaların yanındaki siyah yazılar) bul.
@@ -744,12 +890,12 @@ Hiçbir ek açıklama yapma, sadece JSON formatını döndür.`;
     // Haritadan çekilen gemilere göre sistemi güncelle
     let updatedCount = 0;
     extractedShips.forEach(shipName => {
-        // Gemiyi listemizde bul (büyük/küçük harf duyarsız)
-        const ship = liveShipsList.find(s => s.gemiAdi.toUpperCase() === shipName.toUpperCase());
-        if (ship) {
-            ship.lastAisUpdate = new Date().toISOString();
-            updatedCount++;
-        }
+      // Gemiyi listemizde bul (büyük/küçük harf duyarsız)
+      const ship = liveShipsList.find(s => s.gemiAdi.toUpperCase() === shipName.toUpperCase());
+      if (ship) {
+        ship.lastAisUpdate = new Date().toISOString();
+        updatedCount++;
+      }
     });
 
     // İsteğe bağlı: Ekranda gözükmeyen gemileri listeden silmek/gizlemek de buraya eklenebilir.

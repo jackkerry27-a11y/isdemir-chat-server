@@ -40,9 +40,29 @@ class SocketService {
   Function(dynamic)? onMessageReceived;
   Function(dynamic)? onTypingStatusReceived;
   Function(List<dynamic>)? onShipsUpdated;
+  Function(List<dynamic>)? onRadioUsersUpdated;
+  Function(dynamic)? onRadioIncomingTalk;
+  Function(dynamic)? onRadioAudioBroadcast;
+  Function(dynamic)? onRadioTalkEnded;
+
+  Map<String, dynamic>? activeRadioJoinData;
+  String? _savedName;
+  String? _savedAvatarUrl;
 
   void connect(String userId, String name, String? avatarUrl) {
     currentUserId = userId;
+    _savedName = name;
+    _savedAvatarUrl = avatarUrl;
+    
+    if (socket != null && socket!.connected) {
+      socket!.emit('user_connected', {
+        'userId': userId,
+        'name': name,
+        'avatarUrl': avatarUrl,
+      });
+      return;
+    }
+
     socket = IO.io(serverUrl, <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': false,
@@ -53,11 +73,17 @@ class SocketService {
     socket!.onConnect((_) {
       print('Socket.io Sunucusuna bağlanıldı');
       socket!.emit('user_connected', {
-        'userId': userId,
-        'name': name,
-        'avatarUrl': avatarUrl,
+        'userId': currentUserId ?? userId,
+        'name': _savedName ?? name,
+        'avatarUrl': _savedAvatarUrl ?? avatarUrl,
       });
       socket!.emit('request_ships_update');
+
+      // Telsiz ekranında bulunuluyorsa odaya katılımı anında ilet
+      if (activeRadioJoinData != null) {
+        print('[SocketService] Telsiz kanalına otomatik bağlanılıyor: ${activeRadioJoinData!['channel']}');
+        socket!.emit('radio_join', activeRadioJoinData);
+      }
     });
 
     socket!.on('ships_update', (data) {
@@ -116,7 +142,113 @@ class SocketService {
       }
     });
 
+    // Telsiz Dinleyicileri
+    socket!.on('radio_users_update', (data) {
+      if (data != null && data['users'] != null) {
+        final List<dynamic> users = List.from(data['users']);
+        if (onRadioUsersUpdated != null) {
+          onRadioUsersUpdated!(users);
+        }
+      }
+    });
+
+    socket!.on('radio_incoming_talk', (data) {
+      if (onRadioIncomingTalk != null) {
+        onRadioIncomingTalk!(data);
+      }
+    });
+
+    socket!.on('radio_audio_broadcast', (data) {
+      if (onRadioAudioBroadcast != null) {
+        onRadioAudioBroadcast!(data);
+      }
+    });
+
+    socket!.on('radio_talk_ended', (data) {
+      if (onRadioTalkEnded != null) {
+        onRadioTalkEnded!(data);
+      }
+    });
+
     socket!.onDisconnect((_) => print('Socket.io bağlantısı koptu'));
+  }
+
+  void joinRadio({
+    required String userId,
+    required String name,
+    required String jobTitle,
+    String? avatarUrl,
+    String channel = '1',
+  }) {
+    activeRadioJoinData = {
+      'userId': userId,
+      'name': name,
+      'jobTitle': jobTitle,
+      'avatarUrl': avatarUrl,
+      'channel': channel,
+    };
+
+    if (socket != null && socket!.connected) {
+      socket!.emit('radio_join', activeRadioJoinData);
+    } else {
+      if (socket == null) {
+        connect(userId, name, avatarUrl);
+      } else if (!socket!.connected) {
+        socket!.connect();
+      }
+    }
+  }
+
+  void requestRadioUsers({String channel = '1'}) {
+    if (socket != null && socket!.connected) {
+      socket!.emit('radio_get_users', {'channel': channel});
+    }
+  }
+
+  void leaveRadio({required String userId, String channel = '1'}) {
+    activeRadioJoinData = null;
+    if (socket != null && socket!.connected) {
+      socket!.emit('radio_leave', {
+        'userId': userId,
+        'channel': channel,
+      });
+    }
+  }
+
+  void startRadioTalk({required String userId, required String name, String channel = '1'}) {
+    if (socket != null && socket!.connected) {
+      socket!.emit('radio_start_talk', {
+        'userId': userId,
+        'name': name,
+        'channel': channel,
+      });
+    }
+  }
+
+  void sendRadioAudioChunk({
+    required String userId,
+    required String name,
+    required String audioBase64,
+    String channel = '1',
+  }) {
+    if (socket != null && socket!.connected) {
+      socket!.emit('radio_audio_chunk', {
+        'userId': userId,
+        'name': name,
+        'audioBase64': audioBase64,
+        'channel': channel,
+      });
+    }
+  }
+
+  void endRadioTalk({required String userId, required String name, String channel = '1'}) {
+    if (socket != null && socket!.connected) {
+      socket!.emit('radio_end_talk', {
+        'userId': userId,
+        'name': name,
+        'channel': channel,
+      });
+    }
   }
 
   void sendMessage(String senderId, String receiverId, String content) {

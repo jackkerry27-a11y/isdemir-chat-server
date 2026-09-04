@@ -14,6 +14,8 @@ class UserModel {
   String lastName;
   String jobTitle;
   String? photoPath;
+  bool isVip;
+  bool telsizYetkisi;
 
   static const Map<String, JobDetails> jobRates = {
     'Liman İşçisi A': JobDetails(37500.0, 864.0, 2166.0, 1083.0),
@@ -27,9 +29,14 @@ class UserModel {
     required this.lastName,
     required this.jobTitle,
     this.photoPath,
+    this.isVip = false,
+    this.telsizYetkisi = false,
   });
 
   JobDetails get currentJobDetails => jobRates[jobTitle] ?? jobRates['Liman İşçisi A']!;
+
+  String get id => '${firstName}_$lastName'.trim().toLowerCase().replaceAll(' ', '_');
+  String get fullName => '$firstName $lastName'.trim();
 
   // Load from SharedPreferences
   static Future<UserModel?> load() async {
@@ -42,6 +49,8 @@ class UserModel {
       lastName: prefs.getString('lastName') ?? '',
       jobTitle: prefs.getString('jobTitle') ?? 'Liman İşçisi A',
       photoPath: prefs.getString('photoPath'),
+      isVip: prefs.getBool('isVip') ?? false,
+      telsizYetkisi: prefs.getBool('telsizYetkisi') ?? false,
     );
   }
 
@@ -52,6 +61,8 @@ class UserModel {
     await prefs.setString('firstName', firstName);
     await prefs.setString('lastName', lastName);
     await prefs.setString('jobTitle', jobTitle);
+    await prefs.setBool('isVip', isVip);
+    await prefs.setBool('telsizYetkisi', telsizYetkisi);
     if (photoPath != null) {
       await prefs.setString('photoPath', photoPath!);
     }
