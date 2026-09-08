@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/user_model.dart';
+import '../utils/push_service.dart';
 
 class AdminScreen extends StatefulWidget {
   const AdminScreen({super.key});
@@ -17,6 +19,8 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
   List<Map<String, dynamic>> _personeller = [];
   List<Map<String, dynamic>> _duyurular = [];
   late TabController _tabController;
+  String _searchQuery = '';
+  String _versionFilter = 'all'; // 'all', 'v9', 'eski'
 
   @override
   void initState() {
@@ -38,19 +42,41 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     });
 
     try {
-      final client = Supabase.instance.client;
+      final personelSnapshot = await FirebaseFirestore.instance.collection('personeller').orderBy('durum', descending: true).get();
       
-      final personelResponse = await client.from('personel').select('''
-        id, ad_soyad, taban_maas, durum, meslek,
-        giris_cikis_log(tarih, islem_tipi, saat),
-        hakedis(normal_mesai_gun, bayram_mesai_gun, guncel_hakedis, ay)
-      ''').order('durum', ascending: false);
+      List<Map<String, dynamic>> personellerList = [];
+      for (var doc in personelSnapshot.docs) {
+        var data = doc.data();
+        data['id'] = doc.id;
+        
+        try {
+          final logsSnapshot = await doc.reference.collection('giris_cikis_log').get();
+          data['giris_cikis_log'] = logsSnapshot.docs.map((d) => d.data()).toList();
+          
+          final hakedisSnapshot = await doc.reference.collection('hakedis').get();
+          data['hakedis'] = hakedisSnapshot.docs.map((d) => d.data()).toList();
+        } catch(e) {
+          data['giris_cikis_log'] = [];
+          data['hakedis'] = [];
+        }
+        
+        personellerList.add(data);
+      }
       
-      final duyurularResponse = await client.from('duyurular').select().order('tarih', ascending: false);
+      final duyurularSnapshot = await FirebaseFirestore.instance.collection('duyurular').orderBy('tarih', descending: true).get();
+      final duyurularList = duyurularSnapshot.docs.map((doc) {
+        var data = doc.data();
+        data['id'] = doc.id;
+        // Timestamp to string if needed, but UI handles string, we might need to handle Timestamp
+        if(data['tarih'] is Timestamp) {
+          data['tarih'] = (data['tarih'] as Timestamp).toDate().toIso8601String();
+        }
+        return data;
+      }).toList();
 
       setState(() {
-        _personeller = List<Map<String, dynamic>>.from(personelResponse);
-        _duyurular = List<Map<String, dynamic>>.from(duyurularResponse);
+        _personeller = personellerList;
+        _duyurular = duyurularList;
         _isLoading = false;
       });
     } catch (e) {
@@ -68,9 +94,91 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
       builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF4338CA))),
     );
     try {
-      await Supabase.instance.client.from('personel').update({'durum': newStatus}).eq('id', id);
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'durum': newStatus});
       Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Durum güncellendi.')));
+      
+      if (newStatus == 'onaylandi') {
+        final personel = _personeller.firstWhere((p) => p['id'] == id, orElse: () => {});
+        final cihazId = personel['cihaz_id'] as String?;
+        if (cihazId != null) {
+          try {
+            await PushService.sendPushNotification(
+              title: 'Hesabınız Onaylandı!',
+              content: 'İsdemir OS uygulamasına artık tam erişimle giriş yapabilirsiniz.',
+              targetCihazId: cihazId,
+            );
+          } catch (e) {
+            print("Push error: $e");
+          }
+        }
+      }
+      
+      _fetchData();
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    }
+  }
+
+  Future<void> _toggleVipStatus(String id, bool currentStatus) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFE50914))),
+    );
+    try {
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'is_vip': !currentStatus});
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(currentStatus ? 'VIP Yetkisi Alındı.' : 'VIP Yetkisi Verildi.')));
+      _fetchData();
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    }
+  }
+
+  Future<void> _toggleTelsizYetkisi(String id, bool currentStatus) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF00FF66))),
+    );
+    try {
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'telsiz_yetkisi': !currentStatus});
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(currentStatus ? 'Telsiz yetkisi kaldırıldı.' : 'Telsiz yetkisi verildi.'),
+          backgroundColor: currentStatus ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+        ),
+      );
+      _fetchData();
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    }
+  }
+
+  Future<void> _toggleYetkiliStatus(String id, bool currentStatus) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFDC2626))),
+    );
+    try {
+      final newStatus = !currentStatus;
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({
+        'is_yetkili': newStatus,
+        'yetkili': newStatus,
+      });
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(newStatus ? '🛡️ Yetkili Statüsü Verildi.' : 'Yetkili Statüsü Kaldırıldı.'),
+          backgroundColor: newStatus ? const Color(0xFFDC2626) : const Color(0xFF64748B),
+        ),
+      );
       _fetchData();
     } catch (e) {
       Navigator.of(context).pop();
@@ -101,9 +209,10 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
               if (titleController.text.isNotEmpty && contentController.text.isNotEmpty) {
                 Navigator.pop(context);
                 try {
-                  await Supabase.instance.client.from('duyurular').insert({
+                  await FirebaseFirestore.instance.collection('duyurular').add({
                     'baslik': titleController.text,
                     'icerik': contentController.text,
+                    'tarih': FieldValue.serverTimestamp(),
                   });
 
                   // Push bildirimi gönder
@@ -175,7 +284,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
 
     if (confirm) {
       try {
-        await Supabase.instance.client.from('duyurular').delete().eq('id', id);
+        await FirebaseFirestore.instance.collection('duyurular').doc(id).delete();
         _fetchData();
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Duyuru silindi.')));
       } catch (e) {
@@ -216,37 +325,72 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     } catch (_) {}
   }
 
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFFAFAFA),
-      body: Column(
+      backgroundColor: const Color(0xFF0F0F13),
+      body: Stack(
         children: [
-          _buildHeader(),
-          Expanded(
-            child: _isLoading 
-                ? const Center(child: CircularProgressIndicator(color: Color(0xFF4338CA)))
-                : _error.isNotEmpty 
-                    ? Center(child: Text(_error, style: const TextStyle(color: Colors.red)))
-                    : TabBarView(
-                        controller: _tabController,
-                        children: [
-                          _buildPersonelTab(),
-                          _buildDuyurularTab(),
-                        ],
-                      ),
+          // Arka plan resim ve gradient
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 350,
+            child: Stack(
+              children: [
+                SizedBox.expand(
+                  child: Image.asset(
+                    'assets/images/factory_bg.jpg',
+                    fit: BoxFit.cover,
+                  ),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        const Color(0xFFE50914).withValues(alpha: 0.2),
+                        const Color(0xFF0F0F13).withValues(alpha: 0.8),
+                        const Color(0xFF0F0F13),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          
+          Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: _isLoading 
+                    ? const Center(child: CircularProgressIndicator(color: Color(0xFFE50914)))
+                    : _error.isNotEmpty 
+                        ? Center(child: Text(_error, style: const TextStyle(color: Colors.red)))
+                        : TabBarView(
+                            controller: _tabController,
+                            children: [
+                              _buildPersonelTab(),
+                              _buildDuyurularTab(),
+                            ],
+                          ),
+              ),
+            ],
           ),
         ],
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          // Yeni personel ekleme
-        },
-        backgroundColor: Colors.white,
-        elevation: 4,
-        icon: const Icon(Icons.add_circle, color: Color(0xFF4338CA)),
-        label: const Text('Yeni Personel Ekle', style: TextStyle(color: Color(0xFF4338CA), fontWeight: FontWeight.bold)),
+        onPressed: () {},
+        backgroundColor: const Color(0xFFE50914),
+        elevation: 10,
+        
+        icon: const Icon(Icons.add_circle, color: Colors.white),
+        label: const Text('Yeni Personel Ekle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
       ),
     );
   }
@@ -254,23 +398,22 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
   Widget _buildHeader() {
     return Container(
       padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 16, left: 24, right: 24, bottom: 0),
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          colors: [Color(0xFF2E1065), Color(0xFF4338CA), Color(0xFF3B82F6)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              IconButton(
-                icon: const Icon(Icons.arrow_back, color: Colors.white),
-                onPressed: () => Navigator.pop(context),
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(),
+              Container(
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.3),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.arrow_back, color: Colors.white),
+                  onPressed: () => Navigator.pop(context),
+                  padding: const EdgeInsets.all(8),
+                  constraints: const BoxConstraints(),
+                ),
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -286,46 +429,57 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
               Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.15),
+                  color: const Color(0xFFE50914),
                   borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(color: const Color(0xFFE50914).withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4)),
+                  ]
                 ),
                 child: const Icon(Icons.people_alt, color: Colors.white, size: 28),
               )
             ],
           ),
-          const SizedBox(height: 24),
-          TabBar(
-            controller: _tabController,
-            indicator: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.1),
+          const SizedBox(height: 32),
+          Container(
+            height: 50,
+            decoration: BoxDecoration(
+              color: const Color(0xFF1C1C22),
               borderRadius: BorderRadius.circular(12),
             ),
-            indicatorPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: -16),
-            labelColor: Colors.white,
-            unselectedLabelColor: Colors.white70,
-            dividerColor: Colors.transparent,
-            tabs: const [
-              Tab(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.people, size: 20),
-                    SizedBox(width: 8),
-                    Text('Personeller', style: TextStyle(fontWeight: FontWeight.bold)),
-                  ],
-                ),
+            child: TabBar(
+              controller: _tabController,
+              indicator: BoxDecoration(
+                color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.5), width: 1),
               ),
-              Tab(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.campaign, size: 20),
-                    SizedBox(width: 8),
-                    Text('Duyurular', style: TextStyle(fontWeight: FontWeight.bold)),
-                  ],
+              indicatorSize: TabBarIndicatorSize.tab,
+              labelColor: Colors.white,
+              unselectedLabelColor: Colors.white70,
+              dividerColor: Colors.transparent,
+              tabs: const [
+                Tab(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.people, size: 18),
+                      SizedBox(width: 8),
+                      Text('Personeller', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
                 ),
-              ),
-            ],
+                Tab(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.campaign, size: 18),
+                      SizedBox(width: 8),
+                      Text('Duyurular', style: TextStyle(fontWeight: FontWeight.bold)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 8),
         ],
@@ -334,63 +488,161 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
   }
 
   Widget _buildPersonelTab() {
+    final int totalCount = _personeller.length;
+    final int v9Count = _personeller.where((p) {
+      final ver = p['app_version']?.toString() ?? '';
+      final numVer = (p['app_version_num'] as num?)?.toInt() ?? 0;
+      return ver.contains('9') || numVer >= 9;
+    }).length;
+    final int eskiCount = totalCount - v9Count;
+    final double updatePercent = totalCount > 0 ? (v9Count / totalCount) : 0.0;
+
+    final filteredPersoneller = _personeller.where((p) {
+      final name = (p['ad_soyad'] ?? '').toString().toLowerCase();
+      final meslek = (p['meslek'] ?? '').toString().toLowerCase();
+      final query = _searchQuery.toLowerCase().trim();
+      final matchesSearch = query.isEmpty || name.contains(query) || meslek.contains(query);
+      if (!matchesSearch) return false;
+
+      final ver = p['app_version']?.toString() ?? '';
+      final numVer = (p['app_version_num'] as num?)?.toInt() ?? 0;
+      final isV9 = ver.contains('9') || numVer >= 9;
+
+      if (_versionFilter == 'v9') return isV9;
+      if (_versionFilter == 'eski') return !isV9;
+      return true;
+    }).toList();
+
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Row(
+        // ── 🚀 V9.0 CANLI GÜNCELLEME TELEMETRİ BANNER'I ──
+        Container(
+          margin: const EdgeInsets.fromLTRB(24, 16, 24, 8),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                const Color(0xFF10B981).withValues(alpha: 0.15),
+                const Color(0xFF1E293B).withValues(alpha: 0.7),
+              ],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Expanded(
-                child: Container(
-                  height: 48,
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 8, offset: const Offset(0, 2)),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.rocket_launch_rounded, color: Color(0xFF10B981), size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      const Text(
+                        'v9.0 Uygulama Güncelleme Takibi',
+                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                      ),
                     ],
                   ),
-                  child: TextField(
-                    decoration: InputDecoration(
-                      hintText: 'Personel ara...',
-                      hintStyle: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 14),
-                      prefixIcon: const Icon(Icons.search, color: Color(0xFFA0AEC0)),
-                      border: InputBorder.none,
-                      contentPadding: const EdgeInsets.symmetric(vertical: 14),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981),
+                      borderRadius: BorderRadius.circular(8),
                     ),
+                    child: Text(
+                      '%${(updatePercent * 100).toInt()} Güncel',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              // İlerleme Çubuğu
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: updatePercent,
+                  minHeight: 6,
+                  backgroundColor: const Color(0xFF334155),
+                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    '🟢 Güncelleyenler: $v9Count Kişi',
+                    style: const TextStyle(color: Color(0xFF10B981), fontSize: 11.5, fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    '🟠 Eski Sürüm: $eskiCount Kişi',
+                    style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11.5, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        // ── ARAMA & FİLTRELER ──
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8),
+          child: Column(
+            children: [
+              Container(
+                height: 48,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF1C1C22),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: TextField(
+                  onChanged: (val) => setState(() => _searchQuery = val),
+                  style: const TextStyle(color: Colors.white),
+                  decoration: const InputDecoration(
+                    hintText: 'Personel adı veya meslek ara...',
+                    hintStyle: TextStyle(color: Color(0xFFA1A1AA), fontSize: 14),
+                    prefixIcon: Icon(Icons.search, color: Color(0xFFA1A1AA)),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 14),
                   ),
                 ),
               ),
-              const SizedBox(width: 12),
-              Container(
-                height: 48,
-                padding: const EdgeInsets.symmetric(horizontal: 16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 8, offset: const Offset(0, 2)),
-                  ],
-                ),
+              const SizedBox(height: 10),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
                 child: Row(
-                  children: const [
-                    Icon(Icons.filter_list, color: Color(0xFF4338CA), size: 20),
-                    SizedBox(width: 8),
-                    Text('Filtrele', style: TextStyle(color: Color(0xFF1A202C), fontWeight: FontWeight.bold, fontSize: 14)),
+                  children: [
+                    _buildVersionFilterChip('all', 'Tümü ($totalCount)'),
+                    const SizedBox(width: 8),
+                    _buildVersionFilterChip('v9', '🟢 v9.0 Güncel ($v9Count)'),
+                    const SizedBox(width: 8),
+                    _buildVersionFilterChip('eski', '🟠 Eski Sürüm ($eskiCount)'),
                   ],
                 ),
-              )
+              ),
             ],
           ),
         ),
         Expanded(
-          child: _personeller.isEmpty
+          child: filteredPersoneller.isEmpty
               ? const Center(child: Text('Kayıtlı personel bulunamadı.', style: TextStyle(fontSize: 16, color: Colors.grey)))
               : ListView.builder(
                   padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
-                  itemCount: _personeller.length,
+                  itemCount: filteredPersoneller.length,
                   itemBuilder: (context, index) {
-                    final p = _personeller[index];
+                    final p = filteredPersoneller[index];
                     final logs = p['giris_cikis_log'] as List<dynamic>? ?? [];
                     final hakedisler = p['hakedis'] as List<dynamic>? ?? [];
                     final hakedis = hakedisler.isNotEmpty ? hakedisler.first : null;
@@ -405,6 +657,31 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     );
   }
 
+  Widget _buildVersionFilterChip(String filterKey, String label) {
+    final isSelected = _versionFilter == filterKey;
+    return GestureDetector(
+      onTap: () => setState(() => _versionFilter = filterKey),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected ? const Color(0xFFE50914) : const Color(0xFF1C1C22),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: isSelected ? const Color(0xFFE50914) : const Color(0xFF334155)),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            color: isSelected ? Colors.white : const Color(0xFFA1A1AA),
+            fontSize: 11.5,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+          ),
+        ),
+      ),
+    );
+  }
+
+
   Widget _buildPersonelCard(Map<String, dynamic> p, dynamic hakedis, String durum, List<dynamic> logs) {
     Color statusColor;
     String statusText;
@@ -417,7 +694,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
         statusIcon = Icons.check_circle_outline;
         break;
       case 'banlandi':
-        statusColor = const Color(0xFFEF4444);
+        statusColor = const Color(0xFFE50914);
         statusText = 'Banlandı';
         statusIcon = Icons.block;
         break;
@@ -435,40 +712,44 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     final double hakedisAmount = hakedis != null ? (hakedis['guncel_hakedis'] as num).toDouble() : correctTabanMaas;
     final String name = p['ad_soyad'] ?? 'İsimsiz Personel';
     final String initials = _getInitials(name);
-    // Rastgele sahte ID görseli
     final String shortId = p['id'].toString().length >= 4 ? p['id'].toString().substring(0,4).replaceAll('-', '1') : '1000';
+    final bool isVip = p['is_vip'] == true;
+    final bool isTelsiz = p['telsiz_yetkisi'] == true;
+    final bool isYetkili = p['is_yetkili'] == true || p['yetkili'] == true;
+    final String appVer = p['app_version']?.toString() ?? 'v8.0';
+    final bool isV9Updated = appVer.contains('9') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 9;
+    final String updateTime = p['guncelleme_tarihi_str'] ?? '';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFF1C1C22),
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 15, offset: const Offset(0, 4)),
-        ],
       ),
       clipBehavior: Clip.antiAlias,
       child: Container(
-        decoration: BoxDecoration(
-          border: Border(left: BorderSide(color: statusColor, width: 4)),
+        decoration: const BoxDecoration(
+          border: Border(left: BorderSide(color: Color(0xFFE50914), width: 4)),
         ),
         child: Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
             tilePadding: const EdgeInsets.all(16),
             childrenPadding: EdgeInsets.zero,
+            iconColor: Colors.white,
+            collapsedIconColor: Colors.white,
             title: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 // Avatar
                 Container(
                   width: 56, height: 56,
-                  decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(16),
+                  decoration: const BoxDecoration(
+                    color: Color(0xFFE50914),
+                    shape: BoxShape.circle,
                   ),
                   child: Center(
-                    child: Text(initials, style: TextStyle(color: statusColor, fontSize: 20, fontWeight: FontWeight.bold)),
+                    child: Text(initials, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
                   ),
                 ),
                 const SizedBox(width: 16),
@@ -480,12 +761,13 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1A202C)))),
+                          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white))),
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                             decoration: BoxDecoration(
                               color: statusColor.withValues(alpha: 0.1),
                               borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: statusColor.withValues(alpha: 0.3)),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
@@ -495,19 +777,113 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                                 Text(statusText, style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold)),
                               ],
                             ),
-                          )
+                          ),
+                          if (isVip)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6.0),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFFE50914)),
+                                ),
+                                child: const Text('VIP', style: TextStyle(color: Color(0xFFE50914), fontSize: 10, fontWeight: FontWeight.bold)),
+                              ),
+                            ),
+                          if (isTelsiz)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6.0),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF10B981)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: const [
+                                    Icon(Icons.radio_rounded, size: 11, color: Color(0xFF10B981)),
+                                    SizedBox(width: 3),
+                                    Text('TELSİZ', style: TextStyle(color: Color(0xFF10B981), fontSize: 9, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (isYetkili)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6.0),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFDC2626).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFFDC2626)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: const [
+                                    Icon(Icons.shield_rounded, size: 11, color: Color(0xFFDC2626)),
+                                    SizedBox(width: 3),
+                                    Text('YETKİLİ', style: TextStyle(color: Color(0xFFDC2626), fontSize: 9, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 6),
                       Row(
                         children: [
-                          const Icon(Icons.work_outline, size: 14, color: Color(0xFF718096)),
+                          const Icon(Icons.work_outline, size: 14, color: Color(0xFFA1A1AA)),
                           const SizedBox(width: 4),
-                          Text(p['meslek'] ?? 'Belirtilmedi', style: const TextStyle(color: Color(0xFF4A5568), fontSize: 13)),
+                          Text(p['meslek'] ?? 'Belirtilmedi', style: const TextStyle(color: Color(0xFFA1A1AA), fontSize: 13)),
                         ],
                       ),
                       const SizedBox(height: 6),
-                      Text('ID: 100$shortId • İşe Giriş: 12.03.2022', style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 11)),
+                      Text('ID: 100$shortId • İşe Giriş: 12.03.2022', style: const TextStyle(color: Color(0xFF71717A), fontSize: 11)),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+                            decoration: BoxDecoration(
+                              color: isV9Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: isV9Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                              ),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  isV9Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
+                                  size: 11,
+                                  color: isV9Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  isV9Updated ? 'v9.0 GÜNCEL' : 'ESKİ SÜRÜM (v8)',
+                                  style: TextStyle(
+                                    color: isV9Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                    fontSize: 9.5,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          if (updateTime.isNotEmpty) ...[
+                            const SizedBox(width: 8),
+                            Text(
+                              updateTime,
+                              style: const TextStyle(color: Color(0xFF71717A), fontSize: 10.5),
+                            ),
+                          ],
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -519,7 +895,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                 Container(
                   padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: statusColor.withValues(alpha: 0.04),
+                    color: const Color(0xFF27272A).withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -528,9 +904,9 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('Güncel Hakediş', style: TextStyle(fontSize: 11, color: Color(0xFF718096))),
+                          const Text('Güncel Hakediş', style: TextStyle(fontSize: 11, color: Color(0xFFA1A1AA))),
                           const SizedBox(height: 4),
-                          Text(formatCurrency(hakedisAmount), style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: statusColor)),
+                          Text(formatCurrency(hakedisAmount), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
                           if (hakedisAmount > correctTabanMaas) ...[
                              const SizedBox(height: 4),
                              Text('+ ${formatCurrency(hakedisAmount - correctTabanMaas)} Mesai', style: const TextStyle(fontSize: 11, color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
@@ -540,23 +916,69 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         decoration: BoxDecoration(
-                          color: Colors.white,
+                          color: const Color(0xFF3F3F46).withValues(alpha: 0.5),
                           borderRadius: BorderRadius.circular(8),
-                          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4, offset: const Offset(0, 2))],
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                         ),
                         child: Row(
                           children: const [
-                            Icon(Icons.description_outlined, size: 16, color: Color(0xFF4A5568)),
+                            Icon(Icons.description_outlined, size: 16, color: Colors.white),
                             SizedBox(width: 6),
-                            Text('Detay', style: TextStyle(color: Color(0xFF1A202C), fontWeight: FontWeight.bold, fontSize: 13)),
+                            Text('Detay', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                           ],
                         ),
                       )
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () => _toggleTelsizYetkisi(p['id'], isTelsiz),
+                        icon: Icon(isTelsiz ? Icons.radio_rounded : Icons.radio_button_off_rounded, size: 16, color: Colors.white),
+                        label: Text(isTelsiz ? 'Telsiz Açık' : 'Telsiz Ver', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isTelsiz ? const Color(0xFF10B981) : const Color(0xFF334155),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: () => _toggleVipStatus(p['id'], isVip),
+                        icon: Icon(isVip ? Icons.star_border : Icons.star, size: 16, color: Colors.white),
+                        label: Text(isVip ? 'VIP İptal' : 'VIP Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isVip ? const Color(0xFF27272A) : const Color(0xFFE50914),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: () => _toggleYetkiliStatus(p['id'], isYetkili),
+                        icon: Icon(isYetkili ? Icons.security_rounded : Icons.shield_outlined, size: 16, color: Colors.white),
+                        label: Text(isYetkili ? 'Yetkili İptal' : 'Yetkili Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: isYetkili ? const Color(0xFF27272A) : const Color(0xFFDC2626),
+                          foregroundColor: Colors.white,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 8),
               ],
             ),
+
             children: [
               const Divider(height: 1, color: Color(0xFFF1F5F9)),
               if (logs.isNotEmpty) ...[
@@ -586,6 +1008,19 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                                 Text(isGiris ? 'Giriş Yaptı' : 'Çıkış Yaptı', style: TextStyle(fontSize: 12, color: isGiris ? Colors.green : Colors.red, fontWeight: FontWeight.w600)),
                                 const Spacer(),
                                 Text('${log['tarih']} ${log['saat']}', style: const TextStyle(fontSize: 12, color: Color(0xFF718096))),
+                                if (log['latitude'] != null && log['longitude'] != null)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 8.0),
+                                    child: GestureDetector(
+                                      onTap: () async {
+                                        final url = 'https://www.google.com/maps/search/?api=1&query=${log['latitude']},${log['longitude']}';
+                                        if (await canLaunchUrl(Uri.parse(url))) {
+                                          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+                                        }
+                                      },
+                                      child: const Icon(Icons.location_on, size: 16, color: Colors.blueAccent),
+                                    ),
+                                  ),
                               ],
                             ),
                           );

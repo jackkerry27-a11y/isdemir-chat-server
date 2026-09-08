@@ -47,19 +47,12 @@ android {
         jniLibs {
             excludes.addAll(listOf(
                 "lib/x86/**",
-                "lib/x86_64/**",
-                "**/libagora_face_capture_extension.so",
-                "**/libagora_segmentation_extension.so",
-                "**/libagora_lip_sync_extension.so",
-                "**/libagora_clear_vision_extension.so",
-                "**/libagora_content_inspect_extension.so",
-                "**/libagora_video_quality_analyzer_extension.so",
-                "**/libagora_video_av1_encoder_extension.so",
-                "**/libvideo_dec.so"
+                "lib/x86_64/**"
             ))
         }
     }
 }
+
 
 
 

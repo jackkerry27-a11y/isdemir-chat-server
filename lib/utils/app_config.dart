@@ -1,6 +1,6 @@
 class AppConfig {
-  // Uygulamanın güncel sürüm numarası. 
-  // Yeni bir güncelleme çıkarttığınızda bu sayıyı (örneğin 5) yapıp yeni APK almalısınız.
-  static const int currentVersion = 9;
+  // Uygulamanın güncel sürüm numarası (v9.1 / Hotfix).
+  static const int currentVersion = 10;
+  static const String versionName = '9.1';
 }
 
