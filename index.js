@@ -87,13 +87,19 @@ async function sendOneSignalNotification(title, message, data = {}) {
   }
 }
 
-// Zorunlu Güncelleme API
+// Zorunlu Güncelleme API & Doğrudan İndirme Yönlendirmeleri
+const V10_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v10.0/app-release.apk";
+
 app.get('/version', (req, res) => {
   res.json({
     latestVersion: 10,
-    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v10.0/app-release.apk"
+    downloadUrl: V10_APK_URL
   });
 });
+
+app.get('/download', (req, res) => res.redirect(V10_APK_URL));
+app.get('/indir', (req, res) => res.redirect(V10_APK_URL));
+app.get('/apk', (req, res) => res.redirect(V10_APK_URL));
 
 // -----------------------------------------------------------
 // İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ SERVİSİ & SİMÜLASYONU
