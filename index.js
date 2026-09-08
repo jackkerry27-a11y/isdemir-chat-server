@@ -20,7 +20,8 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
     origin: "*",
-  }
+  },
+  maxHttpBufferSize: 1e7, // 10MB ses paketleri ve ekler için
 });
 
 // Kullanıcı durumları hafızada tutuluyor
@@ -30,16 +31,30 @@ const connectedUsers = new Map();
 const ONESIGNAL_APP_ID = process.env.ONESIGNAL_APP_ID || '74f25810-49aa-4dd1-938c-c30229368a63';
 const ONESIGNAL_REST_KEY = process.env.ONESIGNAL_REST_KEY || Buffer.from('b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk=', 'base64').toString('utf-8');
 
-// OneSignal Bildirim Gönderme Yardımcısı
+// OneSignal Bildirim Gönderme Yardımcısı (Gemi bildirimleri sadece VIP'lere gider)
 async function sendOneSignalNotification(title, message, data = {}) {
   try {
-    const payload = JSON.stringify({
+    const isShipRelated = (data && (data.type?.startsWith('ship') || data.type?.startsWith('berth') || data.ship || data.shipName)) ||
+      (title && (title.toLowerCase().includes('gemi') || title.toLowerCase().includes('rıhtım') || title.toLowerCase().includes('liman'))) ||
+      (message && (message.toLowerCase().includes('gemi') || message.toLowerCase().includes('rıhtım')));
+
+    const notificationBody = {
       app_id: ONESIGNAL_APP_ID,
       headings: { tr: title, en: title },
       contents: { tr: message, en: message },
-      included_segments: ['Total Subscriptions'],
       data: data,
-    });
+    };
+
+    if (isShipRelated) {
+      // 🔒 Gemi bildirimleri yalnızca VIP personellere gönderilir
+      notificationBody.filters = [
+        { field: 'tag', key: 'is_vip', relation: '=', value: 'true' }
+      ];
+    } else {
+      notificationBody.included_segments = ['Total Subscriptions'];
+    }
+
+    const payload = JSON.stringify(notificationBody);
 
     const options = {
       hostname: 'onesignal.com',
@@ -159,7 +174,7 @@ let liveShipsList = [
     lastAisUpdate: new Date().toISOString(),
     notifiedApproaching: true,
     notifiedArrival: true,
-    notifiedDeparture: false
+    notifiedDeparture: true
   },
   {
     id: '4',
@@ -404,80 +419,51 @@ function getShipsPayload() {
 }
 
 // -----------------------------------------------------------
-// CANLI GEMİ TRAFİK DÖNGÜSÜ & ANLIK PUSH BİLDİRİM MOTORU
+// İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ (MYSHIPTRACKING)
 // -----------------------------------------------------------
-const { scrapeVesselFinder } = require('./vesselfinder_scraper');
+const { runMyShipTrackingSync } = require('./myshiptracking_engine');
 
-let simulationTick = 0;
+let latestShipsData = [];
 
 async function updateLiveShips() {
-  simulationTick++;
-  const now = new Date();
-  const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
-
-  console.log(`[Sunucu] Gerçek zamanlı gemi verisi çekiliyor... (${timeStr})`);
-
   try {
-    const scrapedShips = await scrapeVesselFinder();
-    if (scrapedShips && scrapedShips.length > 0) {
-      // Gerçek veriler geldi, canlı listeyi bunlarla güncelle
-      // Ancak mevcut simüle ilerleme yüzdelerini (progress) korumak için eşleştir
-      scrapedShips.forEach(newShip => {
-        const existing = liveShipsList.find(s => s.gemiAdi === newShip.name || s.id === newShip.mmsi);
-        if (existing) {
-          existing.lat = newShip.lat || existing.lat;
-          existing.lng = newShip.lon || existing.lng;
-          existing.speedKnots = newShip.sog || existing.speedKnots;
-          existing.heading = newShip.cog || existing.heading;
-          existing.lastAisUpdate = now.toISOString();
-        }
+    const result = await runMyShipTrackingSync(sendOneSignalNotification);
+    if (result && result.success && result.ships) {
+      latestShipsData = result.ships;
+      // Socket.io ile bağlı tüm cihazlara canlı güncelleme gönder
+      io.emit('ships_update', {
+        success: true,
+        port: 'İsdemir (TRIDM)',
+        coordinates: { lat: 36.727229, lng: 36.194910 },
+        lastUpdated: result.timestamp,
+        activeBerths: result.activeCount,
+        dockedCount: result.dockedCount || 0,
+        anchoredCount: result.anchoredCount || 0,
+        ships: result.ships
       });
     }
   } catch (error) {
-    console.log(`[Sunucu] Scraper hatası (Cloudflare engeli vs.), simülasyona devam ediliyor...`);
+    console.error('[Sunucu] Canlı gemi güncelleme hatası:', error.message);
   }
-
-  // Simülasyon döngüsü (Gemi progress ilerletme ve bildirim atma)
-  for (const ship of liveShipsList) {
-    ship.lastAisUpdate = now.toISOString();
-
-
-
-    if (ship.kategori === 'Rihtimdaki' && ship.miktar > 0) {
-      if (ship.progress < 1.0) {
-        ship.progress = Math.min(1.0, Math.round((ship.progress + 0.01) * 100) / 100);
-        ship.durum = `Yanaşık / ${ship.islem == 'Tahliye' ? 'Tahliye' : 'Yükleme'} Yapılıyor (%${Math.round(ship.progress * 100)})`;
-      }
-
-      if (ship.progress >= 1.0 && !ship.notifiedDeparture && ship.id === '3') {
-        ship.kategori = 'Ayrilan';
-        ship.tarihStr = `Ayrıldı (Bugün ${timeStr})`;
-        ship.durum = `Limandan Ayrıldı / Akdeniz Açıklarında Seyirde (11.2 kt)`;
-        ship.speedKnots = 11.2;
-        ship.heading = 250.0;
-        ship.iskeleNo = 'İç Parmak İskelesinden Ayrıldı';
-        ship.notifiedDeparture = true;
-
-        console.log(`[Liman Bildirimi] 🌊 Gemi Limandan Ayrıldı: ${ship.gemiAdi}`);
-        const title = `🌊 Gemi Limandan Ayrıldı: ${ship.gemiAdi}`;
-        const msg = `"${ship.gemiAdi}" gemisi ${Number(ship.miktar).toLocaleString('tr-TR')} tonluk ${ship.yukCinsi} yükleme operasyonunu tamamlayarak İsdemir Limanı'ndan ayrıldı.`;
-        sendOneSignalNotification(title, msg, { type: 'ship_departure', ship: ship.gemiAdi });
-      }
-    }
-  }
-
-  // Socket.io ile bağlı tüm cihazlara canlı güncelleme gönder
-  io.emit('ships_update', getShipsPayload());
 }
 
-// Render.com üzerinde IP banı yememek için 5 dakikada (300.000 ms) bir çalıştır
-setInterval(updateLiveShips, 5 * 60 * 1000);
-// İlk başlangıçta 10 saniye sonra çalıştır
-setTimeout(updateLiveShips, 10000);
+// Canlı MyShipTracking senkronizasyonunu her 30 saniyede bir çalıştır
+setInterval(updateLiveShips, 30 * 1000);
+// İlk başlangıçta 3 saniye sonra çalıştır
+setTimeout(updateLiveShips, 3000);
 
-// Canlı Gemi API Endpoint'i
-app.get('/api/ships/live', (req, res) => {
-  res.json(getShipsPayload());
+// Canlı Gemi API Endpoint'i (İstek geldiğinde canlı AIS yeniler)
+app.get('/api/ships/live', async (req, res) => {
+  try {
+    const syncRes = await runMyShipTrackingSync(sendOneSignalNotification);
+    if (syncRes && syncRes.ships) {
+      latestShipsData = syncRes.ships;
+    }
+    res.json(syncRes);
+  } catch (err) {
+    console.error('[API /api/ships/live Hata]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 // Manuel Gemi Bildirimi Tetikleme API (Admin veya sistem için)
@@ -775,6 +761,7 @@ io.on('connection', (socket) => {
   socket.on('radio_audio_chunk', ({ userId, name, channel = '1', audioBase64 }) => {
     if (!audioBase64) return;
     const chStr = String(channel || '1');
+    console.log(`[Telsiz] 🔊 ${name} ses yayını iletiliyor (Kanal: ${chStr}, Boyut: ${(audioBase64.length / 1024).toFixed(1)} KB)`);
     socket.to(`radio_${chStr}`).emit('radio_audio_broadcast', {
       userId,
       name,
