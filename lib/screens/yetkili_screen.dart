@@ -614,13 +614,13 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
 
   // ── 👥 SEKME 1: PERSONEL & MAAŞ & MESAİ & VARDİYA & GİRİŞ-ÇIKIŞ ──
   Widget _buildPersonnelAndSalaryTab(int totalPersonnel, int pendingCount, double totalHakedisPool) {
-    final int v9Count = _personeller.where((p) {
+    final int v10Count = _personeller.where((p) {
       final ver = p['app_version']?.toString() ?? '';
       final numVer = (p['app_version_num'] as num?)?.toInt() ?? 0;
-      return ver.contains('9') || numVer >= 9;
+      return ver.contains('10') || numVer >= 10;
     }).length;
-    final int eskiCount = totalPersonnel - v9Count;
-    final double updatePercent = totalPersonnel > 0 ? (v9Count / totalPersonnel) : 0.0;
+    final int eskiCount = totalPersonnel - v10Count;
+    final double updatePercent = totalPersonnel > 0 ? (v10Count / totalPersonnel) : 0.0;
 
     final filteredList = _personeller.where((p) {
       final name = (p['ad_soyad'] ?? '').toString().toLowerCase();
@@ -632,7 +632,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
 
       final ver = p['app_version']?.toString() ?? '';
       final numVer = (p['app_version_num'] as num?)?.toInt() ?? 0;
-      final isV9 = ver.contains('9') || numVer >= 9;
+      final isV10 = ver.contains('10') || numVer >= 10;
 
       if (_filterType == 'onayli') {
         return p['durum'] == 'onaylandi';
@@ -642,10 +642,10 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
         return p['is_vip'] == true;
       } else if (_filterType == 'bekleyen') {
         return p['durum'] == 'onay_bekliyor';
-      } else if (_filterType == 'v9') {
-        return isV9;
+      } else if (_filterType == 'v10') {
+        return isV10;
       } else if (_filterType == 'eski') {
-        return !isV9;
+        return !isV10;
       }
       return true;
     }).toList();
@@ -684,7 +684,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
 
           const SizedBox(height: 14),
 
-          // ── 🚀 V9.0 GÜNCELLEME TAKİP KARTI ──
+          // ── 🚀 V10.0 GÜNCELLEME TAKİP KARTI ──
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -710,7 +710,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                         const Icon(Icons.rocket_launch_rounded, color: Color(0xFF10B981), size: 18),
                         const SizedBox(width: 8),
                         Text(
-                          'v9.0 Güncelleme Durumu',
+                          'v10.0 Güncelleme Durumu',
                           style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
                         ),
                       ],
@@ -743,7 +743,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Text(
-                      '🟢 Güncelleyen: $v9Count Kişi',
+                      '🟢 Güncelleyen: $v10Count Kişi',
                       style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
                     ),
                     Text(
@@ -755,6 +755,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
               ],
             ),
           ),
+
 
           const SizedBox(height: 14),
 
@@ -840,7 +841,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
               children: [
                 _buildFilterChip('all', 'Tümü (${_personeller.length})'),
                 const SizedBox(width: 8),
-                _buildFilterChip('v9', '🚀 v9.0 Güncelleyenler ($v9Count)'),
+                _buildFilterChip('v10', '🚀 v10.0 Güncelleyenler ($v10Count)'),
                 const SizedBox(width: 8),
                 _buildFilterChip('eski', '⚠️ Eski Sürümde Kalanlar ($eskiCount)'),
                 const SizedBox(width: 8),
@@ -937,7 +938,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     final bool isYetkili = p['is_yetkili'] == true || p['yetkili'] == true;
     final bool isVip = p['is_vip'] == true;
     final String appVer = p['app_version']?.toString() ?? 'v8.0';
-    final bool isV9Updated = appVer.contains('9') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 9;
+    final bool isV10Updated = appVer.contains('10') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 10;
     final String updateTime = p['guncelleme_tarihi_str'] ?? '';
 
     final JobDetails jobDetails = UserModel.jobRates[meslek] ?? UserModel.jobRates['Liman İşçisi A']!;
@@ -1068,29 +1069,29 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   ),
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                     decoration: BoxDecoration(
-                      color: isV9Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                      color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                       border: Border.all(
-                        color: isV9Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                        color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
                       ),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Icon(
-                          isV9Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
+                          isV10Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
                           size: 9,
-                          color: isV9Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                          color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
                         ),
                         const SizedBox(width: 3),
                         Text(
-                          isV9Updated ? 'v9.0 GÜNCEL' : 'ESKİ SÜRÜM (v8)',
+                          isV10Updated ? 'v10.0 GÜNCEL' : 'ESKİ SÜRÜM',
                           style: GoogleFonts.inter(
                             fontSize: 9,
                             fontWeight: FontWeight.bold,
-                            color: isV9Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                            color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
                           ),
                         ),
                       ],

@@ -1,6 +1,6 @@
 class AppConfig {
-  // Uygulamanın güncel sürüm numarası (v9.1 / Hotfix).
+  // Uygulamanın güncel sürüm numarası (v10.0).
   static const int currentVersion = 10;
-  static const String versionName = '9.1';
+  static const String versionName = '10.0';
 }
 

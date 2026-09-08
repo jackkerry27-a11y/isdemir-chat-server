@@ -91,7 +91,7 @@ async function sendOneSignalNotification(title, message, data = {}) {
 app.get('/version', (req, res) => {
   res.json({
     latestVersion: 10,
-    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v9.0/app-release.apk"
+    downloadUrl: "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v10.0/app-release.apk"
   });
 });
 

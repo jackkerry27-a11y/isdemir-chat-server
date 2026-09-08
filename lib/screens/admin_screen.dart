@@ -489,13 +489,13 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
 
   Widget _buildPersonelTab() {
     final int totalCount = _personeller.length;
-    final int v9Count = _personeller.where((p) {
+    final int v10Count = _personeller.where((p) {
       final ver = p['app_version']?.toString() ?? '';
       final numVer = (p['app_version_num'] as num?)?.toInt() ?? 0;
-      return ver.contains('9') || numVer >= 9;
+      return ver.contains('10') || numVer >= 10;
     }).length;
-    final int eskiCount = totalCount - v9Count;
-    final double updatePercent = totalCount > 0 ? (v9Count / totalCount) : 0.0;
+    final int eskiCount = totalCount - v10Count;
+    final double updatePercent = totalCount > 0 ? (v10Count / totalCount) : 0.0;
 
     final filteredPersoneller = _personeller.where((p) {
       final name = (p['ad_soyad'] ?? '').toString().toLowerCase();
@@ -506,16 +506,16 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
 
       final ver = p['app_version']?.toString() ?? '';
       final numVer = (p['app_version_num'] as num?)?.toInt() ?? 0;
-      final isV9 = ver.contains('9') || numVer >= 9;
+      final isV10 = ver.contains('10') || numVer >= 10;
 
-      if (_versionFilter == 'v9') return isV9;
-      if (_versionFilter == 'eski') return !isV9;
+      if (_versionFilter == 'v10') return isV10;
+      if (_versionFilter == 'eski') return !isV10;
       return true;
     }).toList();
 
     return Column(
       children: [
-        // ── 🚀 V9.0 CANLI GÜNCELLEME TELEMETRİ BANNER'I ──
+        // ── 🚀 V10.0 CANLI GÜNCELLEME TELEMETRİ BANNER'I ──
         Container(
           margin: const EdgeInsets.fromLTRB(24, 16, 24, 8),
           padding: const EdgeInsets.all(16),
@@ -549,7 +549,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                       ),
                       const SizedBox(width: 10),
                       const Text(
-                        'v9.0 Uygulama Güncelleme Takibi',
+                        'v10.0 Uygulama Güncelleme Takibi',
                         style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
                       ),
                     ],
@@ -583,7 +583,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text(
-                    '🟢 Güncelleyenler: $v9Count Kişi',
+                    '🟢 Güncelleyenler: $v10Count Kişi',
                     style: const TextStyle(color: Color(0xFF10B981), fontSize: 11.5, fontWeight: FontWeight.bold),
                   ),
                   Text(
@@ -626,7 +626,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                   children: [
                     _buildVersionFilterChip('all', 'Tümü ($totalCount)'),
                     const SizedBox(width: 8),
-                    _buildVersionFilterChip('v9', '🟢 v9.0 Güncel ($v9Count)'),
+                    _buildVersionFilterChip('v10', '🟢 v10.0 Güncel ($v10Count)'),
                     const SizedBox(width: 8),
                     _buildVersionFilterChip('eski', '🟠 Eski Sürüm ($eskiCount)'),
                   ],
@@ -717,7 +717,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     final bool isTelsiz = p['telsiz_yetkisi'] == true;
     final bool isYetkili = p['is_yetkili'] == true || p['yetkili'] == true;
     final String appVer = p['app_version']?.toString() ?? 'v8.0';
-    final bool isV9Updated = appVer.contains('9') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 9;
+    final bool isV10Updated = appVer.contains('10') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 10;
     final String updateTime = p['guncelleme_tarihi_str'] ?? '';
 
     return Container(
@@ -849,25 +849,25 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
                             decoration: BoxDecoration(
-                              color: isV9Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                              color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: isV9Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                                color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
                               ),
                             ),
                             child: Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
                                 Icon(
-                                  isV9Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
+                                  isV10Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
                                   size: 11,
-                                  color: isV9Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                  color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
                                 ),
                                 const SizedBox(width: 4),
                                 Text(
-                                  isV9Updated ? 'v9.0 GÜNCEL' : 'ESKİ SÜRÜM (v8)',
+                                  isV10Updated ? 'v10.0 GÜNCEL' : 'ESKİ SÜRÜM',
                                   style: TextStyle(
-                                    color: isV9Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                    color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
                                     fontSize: 9.5,
                                     fontWeight: FontWeight.bold,
                                   ),
