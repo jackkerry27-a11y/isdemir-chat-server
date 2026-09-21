@@ -88,18 +88,18 @@ async function sendOneSignalNotification(title, message, data = {}) {
 }
 
 // Zorunlu Güncelleme API & Doğrudan İndirme Yönlendirmeleri
-const V10_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v10.0/app-release.apk";
+const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v11.0/app-release.apk";
 
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 10,
-    downloadUrl: V10_APK_URL
+    latestVersion: 11,
+    downloadUrl: LATEST_APK_URL
   });
 });
 
-app.get('/download', (req, res) => res.redirect(V10_APK_URL));
-app.get('/indir', (req, res) => res.redirect(V10_APK_URL));
-app.get('/apk', (req, res) => res.redirect(V10_APK_URL));
+app.get('/download', (req, res) => res.redirect(LATEST_APK_URL));
+app.get('/indir', (req, res) => res.redirect(LATEST_APK_URL));
+app.get('/apk', (req, res) => res.redirect(LATEST_APK_URL));
 
 // -----------------------------------------------------------
 // İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ SERVİSİ & SİMÜLASYONU
@@ -425,15 +425,18 @@ function getShipsPayload() {
 }
 
 // -----------------------------------------------------------
-// İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ (MYSHIPTRACKING)
+// İSDEMİR LİMANI CANLI AIS GEMİ TRAFİĞİ (AisStream.io Canlı Radar)
 // -----------------------------------------------------------
-const { runMyShipTrackingSync } = require('./myshiptracking_engine');
+const { startAisStreamEngine, syncVesselsToFirestore } = require('./aisstream_engine');
 
 let latestShipsData = [];
 
+// Kesintisiz AisStream.io WebSocket akış motorunu başlat
+startAisStreamEngine(sendOneSignalNotification);
+
 async function updateLiveShips() {
   try {
-    const result = await runMyShipTrackingSync(sendOneSignalNotification);
+    const result = await syncVesselsToFirestore(sendOneSignalNotification);
     if (result && result.success && result.ships) {
       latestShipsData = result.ships;
       // Socket.io ile bağlı tüm cihazlara canlı güncelleme gönder
@@ -453,19 +456,61 @@ async function updateLiveShips() {
   }
 }
 
-// Canlı MyShipTracking senkronizasyonunu her 30 saniyede bir çalıştır
+// Canlı AisStream senkronizasyonunu her 30 saniyede bir çalıştır
 setInterval(updateLiveShips, 30 * 1000);
 // İlk başlangıçta 3 saniye sonra çalıştır
 setTimeout(updateLiveShips, 3000);
 
+// İstemciden (Mobil Cihazdan) Gelen Canlı AIS Senkronizasyonu
+app.post('/api/ships/sync-client', async (req, res) => {
+  try {
+    const { rawText, source } = req.body;
+    console.log(`[API /api/ships/sync-client] İstemciden (${source || 'mobil'}) veri alındı (Boyut: ${rawText ? rawText.length : 0})`);
+    
+    let syncRes;
+    if (rawText && typeof rawText === 'string') {
+      syncRes = await runSyncFromClient(rawText, sendOneSignalNotification);
+    }
+    
+    if (syncRes && syncRes.ships && syncRes.ships.length > 0) {
+      latestShipsData = syncRes.ships;
+      io.emit('ships_update', {
+        success: true,
+        port: 'İsdemir (TRIDM)',
+        coordinates: { lat: 36.727229, lng: 36.194910 },
+        lastUpdated: syncRes.timestamp,
+        activeBerths: syncRes.activeCount,
+        dockedCount: syncRes.dockedCount || 0,
+        anchoredCount: syncRes.anchoredCount || 0,
+        ships: syncRes.ships
+      });
+    }
+    
+    res.json(syncRes || { success: true, message: 'Senkronizasyon işlendi.' });
+  } catch (err) {
+    console.error('[API /api/ships/sync-client Hata]:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 // Canlı Gemi API Endpoint'i (İstek geldiğinde canlı AIS yeniler)
 app.get('/api/ships/live', async (req, res) => {
   try {
-    const syncRes = await runMyShipTrackingSync(sendOneSignalNotification);
-    if (syncRes && syncRes.ships) {
+    const syncRes = await syncVesselsToFirestore(sendOneSignalNotification);
+    if (syncRes && syncRes.success && syncRes.ships && syncRes.ships.length > 0) {
       latestShipsData = syncRes.ships;
+      return res.json(syncRes);
     }
-    res.json(syncRes);
+    
+    // Doğrudan kazıma başarısız olsa bile hafızadaki son verileri döndür
+    res.json({
+      success: true,
+      cached: true,
+      timestamp: new Date().toISOString(),
+      dockedCount: latestShipsData.filter(s => s.rihtimNo && s.rihtimNo !== 'Demir').length,
+      anchoredCount: latestShipsData.filter(s => s.rihtimNo === 'Demir').length,
+      ships: latestShipsData
+    });
   } catch (err) {
     console.error('[API /api/ships/live Hata]:', err.message);
     res.status(500).json({ success: false, error: err.message });
