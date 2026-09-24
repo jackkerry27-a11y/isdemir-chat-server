@@ -88,11 +88,11 @@ async function sendOneSignalNotification(title, message, data = {}) {
 }
 
 // Zorunlu Güncelleme API & Doğrudan İndirme Yönlendirmeleri
-const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v11.0/app-release.apk";
+const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v12.0/app-release.apk";
 
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 11,
+    latestVersion: 12,
     downloadUrl: LATEST_APK_URL
   });
 });
@@ -702,6 +702,18 @@ io.on('connection', (socket) => {
     const receiver = connectedUsers.get(messageData.receiverId);
     if (receiver && receiver.isOnline) {
       io.to(receiver.socketId).emit('receive_message', messageData);
+    }
+    // Üst kısımdan OneSignal push bildirimi gönder
+    try {
+      const senderTitle = messageData.senderName ? `🔒 Noctra: ${messageData.senderName}` : '🔒 Noctra Şifreli Mesaj';
+      const msgPreview = messageData.isEphemeral ? '🔥 1x Tek Görüntülemelik Gizli Mesaj' : (messageData.content || 'Yeni bir mesaj aldınız');
+      sendOneSignalNotification(senderTitle, msgPreview, {
+        type: 'chat',
+        senderId: messageData.senderId,
+        receiverId: messageData.receiverId,
+      });
+    } catch (err) {
+      console.error('[send_message OneSignal Bildirim Hatası]:', err.message);
     }
   });
 
