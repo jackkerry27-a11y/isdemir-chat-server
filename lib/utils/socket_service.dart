@@ -49,6 +49,9 @@ class SocketService {
   String? _savedName;
   String? _savedAvatarUrl;
 
+  String? get savedName => _savedName;
+  String? get savedAvatarUrl => _savedAvatarUrl;
+
   void connect(String userId, String name, String? avatarUrl) {
     currentUserId = userId;
     _savedName = name;
@@ -108,27 +111,84 @@ class SocketService {
       }
       if (globalMessengerKey.currentContext != null && data['senderId'] != currentUserId) {
         final screenHeight = MediaQuery.of(globalMessengerKey.currentContext!).size.height;
+        final senderDisplay = data['senderName'] ?? 'Noctra Kullanıcısı';
+        final isEphemeral = data['isEphemeral'] == true;
+        final contentDisplay = isEphemeral 
+            ? '🔥 1x Tek Görüntülemelik Gizli Mesaj' 
+            : (data['content'] ?? 'Yeni bir mesaj aldınız');
+
         globalMessengerKey.currentState!.showSnackBar(
           SnackBar(
             content: Row(
               children: [
-                const Icon(Icons.message, color: Colors.white),
-                const SizedBox(width: 10),
-                Expanded(child: Text('Yeni Mesaj: ${data['content']}')),
+                Container(
+                  padding: const EdgeInsets.all(7),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFFE50914), width: 1.2),
+                  ),
+                  child: const Icon(Icons.shield_rounded, color: Color(0xFFE50914), size: 18),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Row(
+                        children: [
+                          Text(
+                            'NOCTRA',
+                            style: const TextStyle(
+                              color: Color(0xFFE50914),
+                              fontWeight: FontWeight.bold,
+                              fontSize: 11,
+                              letterSpacing: 1.5,
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            '• $senderDisplay',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        contentDisplay,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isEphemeral ? const Color(0xFFFF6B6B) : Colors.white70,
+                          fontStyle: isEphemeral ? FontStyle.italic : FontStyle.normal,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ],
             ),
-            backgroundColor: const Color(0xFF4338CA),
+            backgroundColor: const Color(0xFF140D12),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            margin: EdgeInsets.only(
-              bottom: screenHeight - 150, // Üstte görünmesi için
-              left: 10, 
-              right: 10
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(16),
+              side: const BorderSide(color: Color(0xFFE50914), width: 1.2),
             ),
-            duration: const Duration(seconds: 3),
+            margin: EdgeInsets.only(
+              bottom: screenHeight - 140, // Ekranın en üstünde floating banner
+              left: 12, 
+              right: 12,
+            ),
+            duration: const Duration(seconds: 4),
             action: SnackBarAction(
               label: 'KAPAT',
-              textColor: Colors.white,
+              textColor: const Color(0xFFE50914),
               onPressed: () {},
             ),
           ),
@@ -251,12 +311,20 @@ class SocketService {
     }
   }
 
-  void sendMessage(String senderId, String receiverId, String content) {
+  void sendMessage(
+    String senderId,
+    String receiverId,
+    String content, {
+    String? senderName,
+    bool isEphemeral = false,
+  }) {
     if (socket != null && socket!.connected) {
       final messageData = {
         'senderId': senderId,
         'receiverId': receiverId,
         'content': content,
+        'senderName': senderName ?? _savedName ?? 'Noctra Kullanıcısı',
+        'isEphemeral': isEphemeral,
         'timestamp': DateTime.now().toIso8601String(),
       };
       socket!.emit('send_message', messageData);

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "273895046417",
+    "project_id": "isdemirops",
+    "storage_bucket": "isdemirops.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:273895046417:android:9ea802e2628061225760b0",
+        "android_client_info": {
+          "package_name": "com.example.my_starter_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBBeZ2jcAztqF2ILqTwVsgks4LlUXRc2Y8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -14,7 +15,7 @@ import 'gemiler_screen.dart';
 import '../widgets/vip_gate.dart';
 import 'admin_screen.dart';
 import 'vehicle_screen.dart';
-import 'team_screen.dart';
+import 'noctra/noctra_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'isg_screen.dart';
@@ -107,8 +108,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           }
           if (permission == LocationPermission.whileInUse || permission == LocationPermission.always) {
             Position position = await Geolocator.getCurrentPosition(
-              locationSettings: const LocationSettings(accuracy: LocationAccuracy.high)
-            );
+              locationSettings: const LocationSettings(accuracy: LocationAccuracy.low),
+            ).timeout(const Duration(seconds: 2));
             lat = position.latitude;
             lng = position.longitude;
           }
@@ -169,11 +170,32 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
 
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
+    final String? savedLeavesJson = prefs.getString('saved_leave_requests');
+    int calcUcretli = 0;
+    int calcUcretsiz = 0;
+    if (savedLeavesJson != null && savedLeavesJson.isNotEmpty) {
+      try {
+        final List<dynamic> list = jsonDecode(savedLeavesJson);
+        for (final item in list) {
+          final days = item['days'] as int? ?? 0;
+          final type = item['leaveType'] as String? ?? '';
+          if (type == 'Yıllık İzin') {
+            calcUcretli += days;
+          } else if (type == 'Ücretsiz İzin') {
+            calcUcretsiz += days;
+          }
+        }
+      } catch (_) {}
+    } else {
+      await prefs.setInt('ucretliIzinGun', 0);
+      await prefs.setInt('ucretsizIzinGun', 0);
+    }
+
     setState(() {
       _normalMesaiGun = prefs.getInt('normalMesaiGun') ?? 0;
       _bayramMesaiGun = prefs.getInt('bayramMesaiGun') ?? 0;
-      _ucretliIzinGun = prefs.getInt('ucretliIzinGun') ?? 0;
-      _ucretsizIzinGun = prefs.getInt('ucretsizIzinGun') ?? 0;
+      _ucretliIzinGun = calcUcretli;
+      _ucretsizIzinGun = calcUcretsiz;
     });
   }
 
@@ -326,7 +348,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         onBackToHome: () => _onItemTapped(0),
         user: widget.user,
       ),
-      const TeamScreen(),
+      NoctraScreen(user: widget.user),
     ];
 
     return Theme(
@@ -450,7 +472,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                         Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedCalendar01, 'Vardiya', 1))),
                         const SizedBox(width: 72), // FAB notch
                         Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedClock01, 'Mesai', 2))),
-                        Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedUserGroup, 'Ekip', 3))),
+                        Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedShield01, 'Noctra', 3))),
                       ],
                     ),
                   ),
@@ -1398,6 +1420,46 @@ class _QuickActionsSheet extends StatelessWidget {
                           Navigator.push(parentContext, MaterialPageRoute(builder: (_) => const IsgScreen()));
                         },
                       ).animate(delay: 230.ms).fadeIn(duration: 250.ms).scale(begin: const Offset(0.94, 0.94), curve: Curves.easeOutBack),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+
+                // ── 🍱 2-COLUMN BENTO GRID: 4. Satır (Noctra Şifreli İletişim & Gizli Kasa) ──
+                Row(
+                  children: [
+                    Expanded(
+                      child: _BentoControlTile(
+                        hugeIcon: HugeIcons.strokeRoundedShield01,
+                        title: 'Noctra',
+                        subtitle: 'Şifreli Kasa',
+                        accentColor: const Color(0xFFE50914),
+                        badge: 'GİZLİ',
+                        isLiveGlow: true,
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.push(parentContext, MaterialPageRoute(builder: (_) => NoctraScreen(user: user)));
+                        },
+                      ).animate(delay: 260.ms).fadeIn(duration: 250.ms).scale(begin: const Offset(0.94, 0.94), curve: Curves.easeOutBack),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: _BentoControlTile(
+                        hugeIcon: HugeIcons.strokeRoundedSettings01,
+                        title: 'Ayarlar',
+                        subtitle: 'Profil & Tercihler',
+                        accentColor: const Color(0xFF94A3B8),
+                        onTap: () {
+                          Navigator.pop(context);
+                          Navigator.push(parentContext, MaterialPageRoute(builder: (_) => SettingsScreen(
+                            user: user,
+                            onProfileUpdated: () {},
+                            totalSalary: 0,
+                            baseSalary: user.currentJobDetails.baseSalary,
+                            ekMesai: 0,
+                          )));
+                        },
+                      ).animate(delay: 290.ms).fadeIn(duration: 250.ms).scale(begin: const Offset(0.94, 0.94), curve: Curves.easeOutBack),
                     ),
                   ],
                 ),

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/menu_data.dart';
 
 class YemekScreen extends StatefulWidget {
@@ -17,7 +18,7 @@ class _YemekScreenState extends State<YemekScreen> {
     super.initState();
     
     DateTime now = DateTime.now();
-    if (now.month == 8) {
+    if (now.month == 9) {
       selectedDay = now.day;
     } else {
       selectedDay = 1; 
@@ -63,7 +64,7 @@ class _YemekScreenState extends State<YemekScreen> {
 
   @override
   Widget build(BuildContext context) {
-    DailyMenu? menu = MenuData.augustMenu[selectedDay];
+    DailyMenu? menu = MenuData.septemberMenu[selectedDay];
 
     return Scaffold(
       backgroundColor: const Color(0xFFFAFAFA),
@@ -75,7 +76,13 @@ class _YemekScreenState extends State<YemekScreen> {
             top: 0, left: 0, right: 0,
             height: 240,
             child: Container(
-              color: const Color(0xFF4338CA),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF7A0000), Color(0xFFE50914)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
               child: Stack(
                 children: [
                   Positioned(
@@ -113,21 +120,21 @@ class _YemekScreenState extends State<YemekScreen> {
                   if (menu != null) ...[
                     Text(
                       menu.dateText,
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A202C)),
+                      style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold, color: Color(0xFF1A202C)),
                     ),
                     const SizedBox(height: 4),
-                    const Text(
+                    Text(
                       'Bugünkü yemek menüsü',
-                      style: TextStyle(fontSize: 13, color: Color(0xFF718096)),
+                      style: GoogleFonts.inter(fontSize: 13, color: Color(0xFF718096)),
                     ),
                     const SizedBox(height: 24),
                   ],
                   
                   // Menü Yoksa
                   if (menu == null)
-                    const Padding(
-                      padding: EdgeInsets.all(40.0),
-                      child: Text('Bu güne ait menü bulunamadı.', style: TextStyle(color: Colors.grey)),
+                    Padding(
+                      padding: const EdgeInsets.all(40.0),
+                      child: Text('Bu güne ait menü bulunamadı.', style: GoogleFonts.inter(color: Colors.grey)),
                     )
                   else ...[
                     // Kahvaltı Kartı
@@ -137,9 +144,9 @@ class _YemekScreenState extends State<YemekScreen> {
                         width: double.infinity,
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: const Color(0xFFFFF8F1),
+                          color: Colors.white,
                           borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: Colors.orange.withValues(alpha: 0.1)),
+                          border: Border.all(color: const Color(0xFF990000).withValues(alpha: 0.1)),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -148,21 +155,21 @@ class _YemekScreenState extends State<YemekScreen> {
                               children: [
                                 Container(
                                   padding: const EdgeInsets.all(12),
-                                  decoration: const BoxDecoration(color: Colors.orange, shape: BoxShape.circle),
+                                  decoration: const BoxDecoration(color: const Color(0xFF990000), shape: BoxShape.circle),
                                   child: const Icon(Icons.coffee_rounded, color: Colors.white, size: 24),
                                 ),
                                 const SizedBox(width: 16),
-                                const Expanded(
+                                Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text('Kahvaltı', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFFD97706))),
-                                      SizedBox(height: 2),
+                                      Text('Kahvaltı', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: const Color(0xFF990000))),
+                                      const SizedBox(height: 2),
                                       Row(
                                         children: [
-                                          Icon(Icons.access_time, size: 12, color: Color(0xFF9CA3AF)),
-                                          SizedBox(width: 4),
-                                          Text('07:00 - 09:30', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                                          const Icon(Icons.access_time, size: 12, color: Color(0xFF9CA3AF)),
+                                          const SizedBox(width: 4),
+                                          Text('07:00 - 09:30', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF9CA3AF))),
                                         ],
                                       ),
                                     ],
@@ -171,10 +178,10 @@ class _YemekScreenState extends State<YemekScreen> {
                                 Container(
                                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                   decoration: BoxDecoration(
-                                    color: Colors.orange.withValues(alpha: 0.2),
+                                    color: const Color(0xFF990000).withValues(alpha: 0.2),
                                     borderRadius: BorderRadius.circular(12),
                                   ),
-                                  child: const Text('≈ 420 kcal', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFD97706))),
+                                  child: Text('≈ 420 kcal', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF990000))),
                                 ),
                               ],
                             ),
@@ -196,11 +203,11 @@ class _YemekScreenState extends State<YemekScreen> {
                                   child: Row(
                                     mainAxisSize: MainAxisSize.min,
                                     children: [
-                                      Text(_getEmojiForFood(item), style: const TextStyle(fontSize: 16)),
+                                      Text(_getEmojiForFood(item), style: GoogleFonts.inter(fontSize: 16)),
                                       const SizedBox(width: 8),
                                       Text(
                                         item,
-                                        style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF4A5568)),
+                                        style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF4A5568)),
                                       ),
                                     ],
                                   ),
@@ -232,21 +239,21 @@ class _YemekScreenState extends State<YemekScreen> {
                               children: [
                                 Container(
                                   padding: const EdgeInsets.all(12),
-                                  decoration: const BoxDecoration(color: Color(0xFF4338CA), shape: BoxShape.circle),
+                                  decoration: const BoxDecoration(color: Color(0xFF990000), shape: BoxShape.circle),
                                   child: const Icon(Icons.restaurant, color: Colors.white, size: 24),
                                 ),
                                 const SizedBox(width: 16),
-                                const Expanded(
+                                Expanded(
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text('Ana Menü', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF4338CA))),
-                                      SizedBox(height: 2),
+                                      Text('Ana Menü', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: const Color(0xFF990000))),
+                                      const SizedBox(height: 2),
                                       Row(
                                         children: [
-                                          Icon(Icons.access_time, size: 12, color: Color(0xFF9CA3AF)),
-                                          SizedBox(width: 4),
-                                          Text('12:00 - 14:00', style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF))),
+                                          const Icon(Icons.access_time, size: 12, color: Color(0xFF9CA3AF)),
+                                          const SizedBox(width: 4),
+                                          Text('12:00 - 14:00', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF9CA3AF))),
                                         ],
                                       ),
                                     ],
@@ -259,10 +266,10 @@ class _YemekScreenState extends State<YemekScreen> {
                                       Container(
                                         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                         decoration: BoxDecoration(
-                                          color: const Color(0xFF4338CA).withValues(alpha: 0.1),
+                                          color: const Color(0xFF990000).withValues(alpha: 0.1),
                                           borderRadius: BorderRadius.circular(10),
                                         ),
-                                        child: Text('≈ ${menu.totalCalories} kcal', style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF4338CA))),
+                                        child: Text('≈ ${menu.totalCalories} kcal', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF990000))),
                                       ),
                                     if (menu.totalProtein.isNotEmpty) ...[
                                       const SizedBox(height: 4),
@@ -275,9 +282,9 @@ class _YemekScreenState extends State<YemekScreen> {
                                         child: Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
-                                            const Text('🥩', style: TextStyle(fontSize: 11)),
+                                            Text('🥩', style: GoogleFonts.inter(fontSize: 11)),
                                             const SizedBox(width: 4),
-                                            Text('~${menu.totalProtein} Protein', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF059669))),
+                                            Text('~${menu.totalProtein} Protein', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: Color(0xFF059669))),
                                           ],
                                         ),
                                       ),
@@ -303,7 +310,7 @@ class _YemekScreenState extends State<YemekScreen> {
                                         ],
                                       ),
                                       child: Center(
-                                        child: Text(_getEmojiForFood(item.name), style: const TextStyle(fontSize: 24)),
+                                        child: Text(_getEmojiForFood(item.name), style: GoogleFonts.inter(fontSize: 24)),
                                       ),
                                     ),
                                     const SizedBox(width: 14),
@@ -313,7 +320,7 @@ class _YemekScreenState extends State<YemekScreen> {
                                         children: [
                                           Text(
                                             item.name,
-                                            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D3748)),
+                                            style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF2D3748)),
                                           ),
                                           if (item.protein.isNotEmpty) ...[
                                             const SizedBox(height: 3),
@@ -325,7 +332,7 @@ class _YemekScreenState extends State<YemekScreen> {
                                               ),
                                               child: Text(
                                                 '🥩 ${item.protein} protein',
-                                                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF059669)),
+                                                style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF059669)),
                                               ),
                                             ),
                                           ],
@@ -338,11 +345,11 @@ class _YemekScreenState extends State<YemekScreen> {
                                         decoration: BoxDecoration(
                                           color: Colors.white,
                                           borderRadius: BorderRadius.circular(8),
-                                          border: Border.all(color: const Color(0xFF4338CA).withValues(alpha: 0.15)),
+                                          border: Border.all(color: const Color(0xFF990000).withValues(alpha: 0.15)),
                                         ),
                                         child: Text(
                                           '${item.calories} kcal',
-                                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF4338CA)),
+                                          style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: Color(0xFF990000)),
                                         ),
                                       ),
                                   ],
@@ -376,27 +383,27 @@ class _YemekScreenState extends State<YemekScreen> {
                                 color: Color(0xFFFEF2F2),
                                 shape: BoxShape.circle,
                               ),
-                              child: const Icon(Icons.eco_rounded, color: Color(0xFF4338CA), size: 28),
+                              child: const Icon(Icons.eco_rounded, color: Color(0xFF990000), size: 28),
                             ),
                             const SizedBox(width: 16),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text(
+                                  Text(
                                     'Sağlıklı ve Dengeli',
-                                    style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1A202C)),
+                                    style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Color(0xFF1A202C)),
                                   ),
                                   const SizedBox(height: 6),
                                   Text(
                                     'Menülerimiz diyetisyen kontrolünde hazırlanmakta ve günlük kalori dengesi gözetilmektedir.',
-                                    style: TextStyle(fontSize: 11, color: const Color(0xFF718096), height: 1.4),
+                                    style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF718096), height: 1.4),
                                   ),
                                 ],
                               ),
                             ),
                             const SizedBox(width: 8),
-                            const Text('🥗', style: TextStyle(fontSize: 48)),
+                            Text('🥗', style: GoogleFonts.inter(fontSize: 48)),
                           ],
                         ),
                       ),
@@ -415,11 +422,11 @@ class _YemekScreenState extends State<YemekScreen> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: 20),
               physics: const BouncingScrollPhysics(),
-              itemCount: 31,
+              itemCount: 30,
               itemBuilder: (context, index) {
                 int day = index + 1;
                 bool isSelected = day == selectedDay;
-                DateTime date = DateTime(2026, 8, day);
+                DateTime date = DateTime(2026, 9, day);
                 final daysShort = ['Pzt', 'Sal', 'Çar', 'Per', 'Cum', 'Cmt', 'Paz'];
                 String dayName = daysShort[date.weekday - 1]; 
                 
@@ -433,7 +440,7 @@ class _YemekScreenState extends State<YemekScreen> {
                     width: 65,
                     margin: const EdgeInsets.only(right: 12),
                     decoration: BoxDecoration(
-                      color: isSelected ? const Color(0xFF4338CA) : Colors.white,
+                      color: isSelected ? const Color(0xFF990000) : Colors.white,
                       borderRadius: BorderRadius.circular(20),
                       boxShadow: [
                         BoxShadow(
@@ -448,7 +455,7 @@ class _YemekScreenState extends State<YemekScreen> {
                       children: [
                         Text(
                           day.toString(),
-                          style: TextStyle(
+                          style: GoogleFonts.inter(
                             fontSize: 22,
                             fontWeight: FontWeight.bold,
                             color: isSelected ? Colors.white : const Color(0xFF1A202C),
@@ -456,9 +463,9 @@ class _YemekScreenState extends State<YemekScreen> {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Ağu\n$dayName',
+                          'Eyl\n$dayName',
                           textAlign: TextAlign.center,
-                          style: TextStyle(
+                          style: GoogleFonts.inter(
                             fontSize: 10,
                             fontWeight: FontWeight.w600,
                             color: isSelected ? Colors.white.withValues(alpha: 0.9) : const Color(0xFF718096),
@@ -504,14 +511,14 @@ class _YemekScreenState extends State<YemekScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           const SizedBox(height: 6),
-                          const Text(
+                          Text(
                             'Yemek Menüsü',
-                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
+                            style: GoogleFonts.inter(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.white),
                           ),
                           const SizedBox(height: 4),
                           Text(
                             'Günlük yemek listesine göz atın',
-                            style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.9)),
+                            style: GoogleFonts.inter(fontSize: 13, color: Colors.white.withValues(alpha: 0.9)),
                           ),
                         ],
                       ),
@@ -519,7 +526,8 @@ class _YemekScreenState extends State<YemekScreen> {
                     Container(
                       padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.2),
+                        color: Colors.transparent,
+                        border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 1.5),
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: const Icon(Icons.calendar_today_rounded, color: Colors.white, size: 24),

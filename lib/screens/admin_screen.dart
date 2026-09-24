@@ -186,6 +186,51 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     }
   }
 
+  Future<void> _updateNoctraStatus(String id, String newStatus, String? alias) async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFE50914))),
+    );
+    try {
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({
+        'noctra_durum': newStatus,
+        'noctra_onay_tarihi': FieldValue.serverTimestamp(),
+      });
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(newStatus == 'onaylandi'
+              ? '✅ Noctra erişimi onaylandı (${alias ?? 'Kullanıcı'})'
+              : '⛔ Noctra erişim durumu: $newStatus'),
+          backgroundColor: newStatus == 'onaylandi' ? const Color(0xFF10B981) : const Color(0xFFDC2626),
+        ),
+      );
+
+      // Bildirim gönder
+      if (newStatus == 'onaylandi') {
+        final personel = _personeller.firstWhere((p) => p['id'] == id, orElse: () => {});
+        final cihazId = personel['cihaz_id'] as String?;
+        if (cihazId != null && cihazId.isNotEmpty) {
+          try {
+            await PushService.sendPushNotification(
+              title: 'Noctra Erişiminiz Onaylandı! 🩸',
+              content: 'Yönetici gizli iletişim protokolüne katılımınızı onayladı. Şifreniz ile kasayı açabilirsiniz.',
+              targetCihazId: cihazId,
+            );
+          } catch (e) {
+            debugPrint("Noctra push error: $e");
+          }
+        }
+      }
+
+      _fetchData();
+    } catch (e) {
+      Navigator.of(context).pop();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+    }
+  }
+
   void _showAddDuyuruDialog() {
     final titleController = TextEditingController();
     final contentController = TextEditingController();
@@ -495,13 +540,15 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
       return ver.contains('10') || numVer >= 10;
     }).length;
     final int eskiCount = totalCount - v10Count;
+    final int noctraPendingCount = _personeller.where((p) => p['noctra_durum'] == 'beklemede').length;
     final double updatePercent = totalCount > 0 ? (v10Count / totalCount) : 0.0;
 
     final filteredPersoneller = _personeller.where((p) {
       final name = (p['ad_soyad'] ?? '').toString().toLowerCase();
       final meslek = (p['meslek'] ?? '').toString().toLowerCase();
+      final alias = (p['noctra_alias'] ?? '').toString().toLowerCase();
       final query = _searchQuery.toLowerCase().trim();
-      final matchesSearch = query.isEmpty || name.contains(query) || meslek.contains(query);
+      final matchesSearch = query.isEmpty || name.contains(query) || meslek.contains(query) || alias.contains(query);
       if (!matchesSearch) return false;
 
       final ver = p['app_version']?.toString() ?? '';
@@ -510,6 +557,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
 
       if (_versionFilter == 'v10') return isV10;
       if (_versionFilter == 'eski') return !isV10;
+      if (_versionFilter == 'noctra') return p['noctra_durum'] == 'beklemede';
       return true;
     }).toList();
 
@@ -626,6 +674,8 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                   children: [
                     _buildVersionFilterChip('all', 'Tümü ($totalCount)'),
                     const SizedBox(width: 8),
+                    _buildVersionFilterChip('noctra', '🩸 Noctra Talepleri ($noctraPendingCount)'),
+                    const SizedBox(width: 8),
                     _buildVersionFilterChip('v10', '🟢 v10.0 Güncel ($v10Count)'),
                     const SizedBox(width: 8),
                     _buildVersionFilterChip('eski', '🟠 Eski Sürüm ($eskiCount)'),
@@ -716,6 +766,10 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     final bool isVip = p['is_vip'] == true;
     final bool isTelsiz = p['telsiz_yetkisi'] == true;
     final bool isYetkili = p['is_yetkili'] == true || p['yetkili'] == true;
+    final String noctraDurum = p['noctra_durum'] as String? ?? 'kayitsiz';
+    final String? noctraAlias = p['noctra_alias'] as String?;
+    final bool isNoctraPending = noctraDurum == 'beklemede';
+    final bool isNoctraApproved = noctraDurum == 'onaylandi';
     final String appVer = p['app_version']?.toString() ?? 'v8.0';
     final bool isV10Updated = appVer.contains('10') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 10;
     final String updateTime = p['guncelleme_tarihi_str'] ?? '';
@@ -831,6 +885,46 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                                 ),
                               ),
                             ),
+                          if (isNoctraPending)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6.0),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFE50914).withValues(alpha: 0.25),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFFE50914)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.masks_rounded, size: 11, color: Color(0xFFE50914)),
+                                    const SizedBox(width: 3),
+                                    Text('NOCTRA: ${noctraAlias ?? 'Talep'}', style: const TextStyle(color: Color(0xFFE50914), fontSize: 9, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          if (isNoctraApproved)
+                            Padding(
+                              padding: const EdgeInsets.only(left: 6.0),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF8B5CF6)),
+                                ),
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    const Icon(Icons.masks_rounded, size: 11, color: Color(0xFFA78BFA)),
+                                    const SizedBox(width: 3),
+                                    Text('NOCTRA: ${noctraAlias ?? 'Onaylı'}', style: const TextStyle(color: Color(0xFFA78BFA), fontSize: 9, fontWeight: FontWeight.bold)),
+                                  ],
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 6),
@@ -932,47 +1026,141 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
                   ),
                 ),
                 const SizedBox(height: 12),
+                if (isNoctraPending) ...[
+                  Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF26050B),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.7), width: 1.2),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(Icons.masks_rounded, color: Color(0xFFE50914), size: 20),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Noctra Katılım Talebi',
+                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'Kod Adı: "${noctraAlias ?? 'Belirtilmedi'}"',
+                                style: const TextStyle(color: Color(0xFFFF7A85), fontWeight: FontWeight.w600, fontSize: 11.5),
+                              ),
+                            ],
+                          ),
+                        ),
+                        ElevatedButton.icon(
+                          onPressed: () => _updateNoctraStatus(p['id'], 'onaylandi', noctraAlias),
+                          icon: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
+                          label: const Text('Onayla', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF10B981),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            minimumSize: const Size(60, 32),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        ElevatedButton.icon(
+                          onPressed: () => _updateNoctraStatus(p['id'], 'reddedildi', noctraAlias),
+                          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white),
+                          label: const Text('Reddet', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFDC2626),
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                            minimumSize: const Size(60, 32),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                ],
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.end,
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: () => _toggleTelsizYetkisi(p['id'], isTelsiz),
-                        icon: Icon(isTelsiz ? Icons.radio_rounded : Icons.radio_button_off_rounded, size: 16, color: Colors.white),
-                        label: Text(isTelsiz ? 'Telsiz Açık' : 'Telsiz Ver', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isTelsiz ? const Color(0xFF10B981) : const Color(0xFF334155),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: () => _toggleTelsizYetkisi(p['id'], isTelsiz),
+                          icon: Icon(isTelsiz ? Icons.radio_rounded : Icons.radio_button_off_rounded, size: 16, color: Colors.white),
+                          label: Text(isTelsiz ? 'Telsiz Açık' : 'Telsiz Ver', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isTelsiz ? const Color(0xFF10B981) : const Color(0xFF334155),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: () => _toggleVipStatus(p['id'], isVip),
-                        icon: Icon(isVip ? Icons.star_border : Icons.star, size: 16, color: Colors.white),
-                        label: Text(isVip ? 'VIP İptal' : 'VIP Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isVip ? const Color(0xFF27272A) : const Color(0xFFE50914),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: () => _toggleVipStatus(p['id'], isVip),
+                          icon: Icon(isVip ? Icons.star_border : Icons.star, size: 16, color: Colors.white),
+                          label: Text(isVip ? 'VIP İptal' : 'VIP Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isVip ? const Color(0xFF27272A) : const Color(0xFFE50914),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: () => _toggleYetkiliStatus(p['id'], isYetkili),
-                        icon: Icon(isYetkili ? Icons.security_rounded : Icons.shield_outlined, size: 16, color: Colors.white),
-                        label: Text(isYetkili ? 'Yetkili İptal' : 'Yetkili Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isYetkili ? const Color(0xFF27272A) : const Color(0xFFDC2626),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: () => _toggleYetkiliStatus(p['id'], isYetkili),
+                          icon: Icon(isYetkili ? Icons.security_rounded : Icons.shield_outlined, size: 16, color: Colors.white),
+                          label: Text(isYetkili ? 'Yetkili İptal' : 'Yetkili Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isYetkili ? const Color(0xFF27272A) : const Color(0xFFDC2626),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: () => _updateNoctraStatus(
+                            p['id'],
+                            isNoctraApproved ? 'reddedildi' : 'onaylandi',
+                            noctraAlias,
+                          ),
+                          icon: Icon(
+                            isNoctraApproved ? Icons.lock_rounded : Icons.masks_rounded,
+                            size: 16,
+                            color: Colors.white,
+                          ),
+                          label: Text(
+                            isNoctraApproved ? 'Noctra Kapat' : 'Noctra Yetkisi',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                          ),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: isNoctraApproved ? const Color(0xFF6D28D9) : const Color(0xFF1E141D),
+                            foregroundColor: Colors.white,
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
                 const SizedBox(height: 8),

@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:video_player/video_player.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'dart:ui';
 import 'main_screen.dart';
 import '../models/user_model.dart';
@@ -20,27 +20,16 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
   String _status = 'onay_bekliyor';
   String _error = '';
   late AnimationController _blinkController;
-  late VideoPlayerController _videoController;
 
   @override
   void initState() {
     super.initState();
     _blinkController = AnimationController(vsync: this, duration: const Duration(milliseconds: 600))..repeat(reverse: true);
-    
-    // Kullanıcının kaydettiği Battlefield 6 oyun videosu
-    _videoController = VideoPlayerController.asset('assets/videos/game_video.mp4')
-      ..initialize().then((_) {
-        _videoController.setLooping(true);
-        _videoController.play();
-        setState(() {}); // Video yüklendiğinde ekranı güncelle
-      });
-
     _checkStatus();
   }
 
   @override
   void dispose() {
-    _videoController.dispose();
     _blinkController.dispose();
     super.dispose();
   }
@@ -63,13 +52,13 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
         return;
       }
 
-      final response = await Supabase.instance.client
-          .from('personel')
-          .select('durum')
-          .eq('cihaz_id', cihazId)
-          .maybeSingle();
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('personeller')
+          .where('cihaz_id', isEqualTo: cihazId)
+          .limit(1)
+          .get();
 
-      if (response == null) {
+      if (querySnapshot.docs.isEmpty) {
          setState(() {
           _error = 'Kayıt bulunamadı. Silinmiş olabilirsiniz.';
           _isLoading = false;
@@ -77,6 +66,7 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
         return;
       }
 
+      final response = querySnapshot.docs.first.data();
       final durum = response['durum'] as String;
       
       setState(() {
@@ -104,34 +94,37 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Colors.black,
+      backgroundColor: const Color(0xFF0F0F13),
       body: Stack(
         children: [
-          // Arka plan tam ekran video
-          if (_videoController.value.isInitialized)
-            SizedBox.expand(
-              child: FittedBox(
-                fit: BoxFit.cover,
-                child: SizedBox(
-                  width: _videoController.value.size.width,
-                  height: _videoController.value.size.height,
-                  child: VideoPlayer(_videoController),
-                ),
+          // Background Image with dark overlay
+          SizedBox.expand(
+            child: Image.asset(
+              'assets/images/factory_bg.jpg',
+              fit: BoxFit.cover,
+            ),
+          ),
+          
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [
+                  const Color(0xFFE50914).withValues(alpha: 0.1),
+                  const Color(0xFF0F0F13).withValues(alpha: 0.95),
+                  const Color(0xFF0F0F13),
+                ],
               ),
             ),
-          
-          // Videonun üstüne hafif karanlık katman (yazıların okunması için)
-          if (_videoController.value.isInitialized)
-            Container(
-              color: Colors.black.withValues(alpha: 0.4),
-            ),
+          ),
 
           SafeArea(
             child: Center(
               child: Padding(
                 padding: const EdgeInsets.all(24.0),
                 child: _isLoading 
-                    ? const CircularProgressIndicator(color: Color(0xFF4338CA))
+                    ? const CircularProgressIndicator(color: Color(0xFFE50914))
                     : _buildContent(),
               ),
             ),
@@ -145,15 +138,12 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
     if (_error.isNotEmpty) {
       return _buildMessageCard(
         icon: Icons.error_outline_rounded,
-        iconColor: Colors.red,
         title: 'Hata',
         message: _error,
         action: ElevatedButton(
           onPressed: () async {
-            // Cihaz bilgilerini temizle ve kayıt ekranına dön
             final prefs = await SharedPreferences.getInstance();
             await prefs.clear();
-            await Supabase.instance.client.auth.signOut();
             if (context.mounted) {
               Navigator.of(context).pushAndRemoveUntil(
                 MaterialPageRoute(builder: (_) => const RegisterScreen()),
@@ -161,8 +151,8 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
               );
             }
           },
-          style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
-          child: const Text('Kayıt Ekranına Dön', style: TextStyle(color: Colors.white)),
+          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914)),
+          child: Text('Kayıt Ekranına Dön', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
         )
       );
     }
@@ -170,7 +160,6 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
     if (_status == 'banlandi') {
       return _buildMessageCard(
         icon: Icons.block_rounded,
-        iconColor: Colors.red,
         title: 'Erişim Engellendi',
         message: 'Cihazınızın sisteme erişimi yönetici tarafından engellenmiştir. Detaylı bilgi için İnsan Kaynakları ile görüşün.',
       );
@@ -181,20 +170,37 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
 
   Widget _buildPending() {
     return _buildMessageCard(
-      icon: Icons.hourglass_empty_rounded,
-      iconColor: const Color(0xFFEA580C),
       title: 'Yönetici Onayı Bekleniyor',
       showPoliceLights: true,
-      message: 'Kaydınız başarıyla alındı. Sisteme giriş yapabilmeniz için yöneticinin hesabınızı ve cihazınızı onaylaması beklenmektedir.\nBu işlem biraz zaman alabilir.',
-      action: ElevatedButton.icon(
-        onPressed: _checkStatus,
-        icon: const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
-        label: const Text('Durumu Kontrol Et', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-        style: ElevatedButton.styleFrom(
-          backgroundColor: const Color(0xFF4338CA),
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          elevation: 0,
+      message: 'Kaydınız başarıyla alındı. Sisteme giriş yapabilmeniz için yöneticinin hesabınızı ve cihazınızı onaylaması beklenmektedir.',
+      action: Container(
+        width: double.infinity,
+        height: 56,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: const LinearGradient(
+            colors: [Color(0xFFE50914), Color(0xFF8B0000)],
+            begin: Alignment.centerLeft,
+            end: Alignment.centerRight,
+          ),
+          boxShadow: [
+            BoxShadow(color: const Color(0xFFE50914).withValues(alpha: 0.3), blurRadius: 16, offset: const Offset(0, 8)),
+          ]
+        ),
+        child: Material(
+          color: Colors.transparent,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: _checkStatus,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.refresh_rounded, color: Colors.white, size: 20),
+                const SizedBox(width: 12),
+                Text('Durumu Kontrol Et', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+              ],
+            ),
+          ),
         ),
       )
     );
@@ -202,8 +208,6 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
 
   Widget _buildMessageCard({
     IconData? icon, 
-    Color? iconColor, 
-    Widget? topWidget,
     required String title, 
     required String message, 
     Widget? action,
@@ -212,79 +216,168 @@ class _ApprovalScreenState extends State<ApprovalScreen> with SingleTickerProvid
     return ClipRRect(
       borderRadius: BorderRadius.circular(32),
       child: BackdropFilter(
-        filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
         child: Container(
           constraints: const BoxConstraints(maxWidth: 400),
-          padding: const EdgeInsets.all(32),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.85),
+            color: const Color(0xFF1C1C22).withValues(alpha: 0.8),
             borderRadius: BorderRadius.circular(32),
-            border: Border.all(color: Colors.white.withValues(alpha: 0.3), width: 1.5),
+            border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.2), width: 1.5),
             boxShadow: [
-              BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 24, offset: const Offset(0, 8)),
+              BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 40, offset: const Offset(0, 10)),
             ],
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
-        children: [
-          if (topWidget != null) 
-            topWidget
-          else if (icon != null)
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                border: Border.all(color: const Color(0xFFE2E8F0), width: 1.5),
-              ),
-              child: Icon(icon, size: 56, color: iconColor),
-            ),
-          const SizedBox(height: 32),
-          Text(title, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800, color: Color(0xFF1E293B)), textAlign: TextAlign.center),
-          
-          if (showPoliceLights) ...[
-            const SizedBox(height: 16),
-            AnimatedBuilder(
-              animation: _blinkController,
-              builder: (context, child) {
-                return Row(
+            children: [
+              if (showPoliceLights)
+                _buildConcentricShield()
+              else if (icon != null)
+                Container(
+                  padding: const EdgeInsets.all(24),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: const Color(0xFFE50914).withValues(alpha: 0.1),
+                    border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.3), width: 1.5),
+                  ),
+                  child: Icon(icon, size: 56, color: const Color(0xFFE50914)),
+                ),
+                
+              const SizedBox(height: 32),
+              Text(title, style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.w800, color: Colors.white), textAlign: TextAlign.center),
+              
+              if (showPoliceLights) ...[
+                const SizedBox(height: 20),
+                AnimatedBuilder(
+                  animation: _blinkController,
+                  builder: (context, child) {
+                    return Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        _buildDot(0.0),
+                        const SizedBox(width: 8),
+                        _buildDot(0.5),
+                        const SizedBox(width: 8),
+                        _buildDot(1.0),
+                      ],
+                    );
+                  },
+                ),
+                const SizedBox(height: 24),
+              ] else ...[
+                 const SizedBox(height: 16),
+              ],
+              
+              Text(message, style: GoogleFonts.inter(fontSize: 13, color: const Color(0xFFA1A1AA), height: 1.6), textAlign: TextAlign.center),
+              
+              if (showPoliceLights) ...[
+                const SizedBox(height: 24),
+                Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Container(
-                      width: 24,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.blue.withValues(alpha: _blinkController.value < 0.5 ? 1.0 : 0.2),
-                        borderRadius: BorderRadius.circular(2),
-                        boxShadow: _blinkController.value < 0.5 ? [const BoxShadow(color: Colors.blue, blurRadius: 6)] : [],
-                      ),
-                    ),
+                    const Icon(Icons.access_time_rounded, color: Color(0xFFE50914), size: 16),
                     const SizedBox(width: 8),
-                    Container(
-                      width: 24,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: Colors.orange.withValues(alpha: _blinkController.value >= 0.5 ? 1.0 : 0.2),
-                        borderRadius: BorderRadius.circular(2),
-                        boxShadow: _blinkController.value >= 0.5 ? [const BoxShadow(color: Colors.orange, blurRadius: 6)] : [],
-                      ),
-                    ),
+                    Text('Bu işlem biraz zaman alabilir.', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFFA1A1AA))),
                   ],
-                );
-              },
-            ),
-            const SizedBox(height: 24),
-          ] else ...[
-             const SizedBox(height: 16),
-          ],
-          
-          Text(message, style: const TextStyle(fontSize: 13, color: Color(0xFF64748B), height: 1.6), textAlign: TextAlign.center),
-          if (action != null) ...[
-            SizedBox(width: double.infinity, child: action),
-          ]
-        ],
+                ),
+              ],
+
+              const SizedBox(height: 32),
+              
+              if (action != null) ...[
+                SizedBox(width: double.infinity, child: action),
+              ]
+            ],
+          ),
+        ),
       ),
-    ),
-    ),
+    );
+  }
+
+  Widget _buildDot(double threshold) {
+    bool isActive = (_blinkController.value * 1.5) >= threshold && (_blinkController.value * 1.5) < threshold + 0.5;
+    return Container(
+      width: 24,
+      height: 4,
+      decoration: BoxDecoration(
+        color: isActive ? const Color(0xFFE50914) : const Color(0xFF3F3F46),
+        borderRadius: BorderRadius.circular(2),
+        boxShadow: isActive ? [const BoxShadow(color: Color(0xFFE50914), blurRadius: 6)] : [],
+      ),
+    );
+  }
+
+  Widget _buildConcentricShield() {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        // Outer glow
+        Container(
+          width: 180,
+          height: 180,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            boxShadow: [
+              BoxShadow(color: const Color(0xFFE50914).withValues(alpha: 0.15), blurRadius: 60, spreadRadius: 10),
+            ],
+          ),
+        ),
+        // Dashed/Dotted outer circle
+        Container(
+          width: 160,
+          height: 160,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.2), width: 1, style: BorderStyle.solid),
+          ),
+        ),
+        // Middle circle
+        Container(
+          width: 130,
+          height: 130,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: const Color(0xFFE50914).withValues(alpha: 0.05),
+            border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.4), width: 2),
+          ),
+        ),
+        // Inner circle with gradient
+        Container(
+          width: 90,
+          height: 90,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: RadialGradient(
+              colors: [
+                const Color(0xFFE50914).withValues(alpha: 0.6),
+                const Color(0xFF8B0000).withValues(alpha: 0.2),
+              ],
+            ),
+          ),
+          child: Stack(
+            alignment: Alignment.center,
+            clipBehavior: Clip.none,
+            children: [
+              const Icon(Icons.shield_rounded, color: Color(0xFFE50914), size: 56),
+              const Icon(Icons.person_rounded, color: Colors.white, size: 28),
+              Positioned(
+                bottom: -4,
+                right: -4,
+                child: Container(
+                  padding: const EdgeInsets.all(2),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C1C22),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: const Color(0xFFE50914), width: 1.5),
+                  ),
+                  child: const Icon(Icons.check_rounded, color: Colors.white, size: 12),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -13,7 +14,6 @@ import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:intl/intl.dart';
-import 'package:http/http.dart' as http;
 
 import '../utils/radio_sound_effects.dart';
 import '../utils/pdf_font_helper.dart';
@@ -22,6 +22,7 @@ import '../widgets/industrial_animations.dart';
 import '../widgets/glass_widgets.dart';
 import '../widgets/vip_gate.dart';
 import '../models/user_model.dart';
+import '../services/ship_tracking_service.dart';
 
 class GemilerScreen extends StatefulWidget {
   final UserModel? user;
@@ -40,6 +41,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
   int _touchedBarIndex = -1;
   bool _isCheckingVip = true;
   bool _isVip = false;
+  Timer? _autoSyncTimer;
 
   @override
   void initState() {
@@ -53,6 +55,21 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     _loadUserName();
     _loadSoundPreference();
     _verifyVipAccess();
+
+    // AisStream.io kesintisiz canlı radar akışını başlat
+    ShipTrackingService.startLiveAisStream();
+
+    // Sayfa açıldığında arka planda sessizce canlı radar verilerini senkronize et
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _syncLiveAisStream(silent: true);
+    });
+
+    // 45 saniyede bir arkaplanda canlı radar verilerini otomatik tazele
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+      if (mounted && !_isSyncing) {
+        _syncLiveAisStream(silent: true);
+      }
+    });
   }
 
   Future<void> _verifyVipAccess() async {
@@ -130,66 +147,104 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
 
   @override
   void dispose() {
+    _autoSyncTimer?.cancel();
     _blinkController.dispose();
     super.dispose();
   }
 
   bool _isSyncing = false;
 
-  Future<void> _syncLiveMyShipTracking() async {
+  Future<void> _syncLiveAisStream({bool silent = false}) async {
     if (_isSyncing) return;
-    _playSound('squelch');
-    setState(() {
-      _isSyncing = true;
-      _selectedFilter = 'Gemi Başlama Alındı';
-    });
+    if (!silent) {
+      _playSound('squelch');
+      setState(() {
+        _isSyncing = true;
+      });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          backgroundColor: const Color(0xFF161A22),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          duration: const Duration(seconds: 2),
-          content: Row(
-            children: const [
-              SizedBox(
-                width: 16,
-                height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF10B981)),
-              ),
-              SizedBox(width: 12),
-              Text('Canlı liman radar verileri güncelleniyor...', style: TextStyle(color: Colors.white, fontSize: 13)),
-            ],
-          ),
-        ),
-      );
-    }
-
-    try {
-      final res = await http
-          .get(Uri.parse('https://isdemir-chat-server.onrender.com/api/ships/live'))
-          .timeout(const Duration(seconds: 12));
-      _playSound('roger');
-      if (mounted && res.statusCode == 200) {
+      if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             backgroundColor: const Color(0xFF161A22),
             behavior: SnackBarBehavior.floating,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-            duration: const Duration(seconds: 2),
+            duration: const Duration(seconds: 3),
             content: Row(
               children: const [
-                Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 18),
-                SizedBox(width: 10),
-                Text('Rıhtım 1-5 canlı gemileri başarıyla güncellendi.', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF10B981)),
+                ),
+                SizedBox(width: 12),
+                Text('AisStream + Neptune canlı radar taranıyor...', style: TextStyle(color: Colors.white, fontSize: 13)),
               ],
             ),
           ),
         );
       }
+    } else {
+      _isSyncing = true;
+    }
+
+    try {
+      final result = await ShipTrackingService.syncLiveShips();
+      if (!silent && mounted) {
+        if (result.success) {
+          _playSound('roger');
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFF10B981),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 4),
+              content: Row(
+                children: [
+                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '✅ AisStream + Neptune: ${result.dockedCount} rıhtım, ${result.anchoredCount} demirde canlı gemi güncellendi.',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              backgroundColor: const Color(0xFFDC2626),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              duration: const Duration(seconds: 4),
+              content: Row(
+                children: [
+                  const Icon(Icons.error_outline_rounded, color: Colors.white, size: 20),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      result.error ?? 'AisStream canlı radar verisi güncellenemedi.',
+                      style: const TextStyle(color: Colors.white, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+      }
     } catch (e) {
       debugPrint('Sync hata: $e');
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFFDC2626),
+            content: Text('Radar hatası: $e', style: const TextStyle(color: Colors.white)),
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
@@ -967,7 +1022,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
         actions: [
           // Canlı Verileri Senkronize Et
           IconButton(
-            tooltip: 'Canlı Verileri Senkronize Et',
+            tooltip: 'AisStream Canlı Radar Senkronize Et',
             icon: _isSyncing
                 ? const SizedBox(
                     width: 18,
@@ -975,7 +1030,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                     child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF10B981)),
                   )
                 : const Icon(Icons.sync_rounded, color: Color(0xFF10B981), size: 22),
-            onPressed: _syncLiveMyShipTracking,
+            onPressed: _syncLiveAisStream,
           ),
           // Ses Açma / Kapatma Butonu
           IconButton(
@@ -1187,7 +1242,11 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     required int emptyBerthCount,
     required int demirCount,
   }) {
-    return CustomScrollView(
+    return RefreshIndicator(
+      color: const Color(0xFF10B981),
+      backgroundColor: const Color(0xFF161A22),
+      onRefresh: () => _syncLiveAisStream(silent: false),
+      child: CustomScrollView(
       slivers: [
         // KPI TELEMETRİ SAYAÇLARI (AnimatedFlipCounter)
         SliverToBoxAdapter(
@@ -1377,7 +1436,8 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
 
         const SliverToBoxAdapter(child: SizedBox(height: 85)),
       ],
-    );
+    ),
+  );
   }
 
   // =========================================================================

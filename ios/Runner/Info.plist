@@ -4,6 +4,10 @@
 	<dict>
 		<key>CADisableMinimumFrameDurationOnPhone</key>
 		<true/>
+		<key>NSLocationWhenInUseUsageDescription</key>
+		<string>İşe giriş ve çıkış işlemlerinde konumunuzu doğrulamak için konum iznine ihtiyacımız var.</string>
+		<key>NSLocationAlwaysUsageDescription</key>
+		<string>İşe giriş ve çıkış işlemlerinde konumunuzu doğrulamak için konum iznine ihtiyacımız var.</string>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
 		<key>CFBundleDisplayName</key>

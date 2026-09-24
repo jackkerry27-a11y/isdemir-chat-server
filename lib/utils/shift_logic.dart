@@ -8,6 +8,7 @@ enum ShiftType {
 enum VardiyaGunu {
   sali,
   carsamba,
+  cuma,
   cumartesi,
 }
 
@@ -43,6 +44,25 @@ class ShiftLogic {
       if (cycle == 0) return ShiftType.sabah;
       if (cycle == 1) return ShiftType.gece;
       return ShiftType.aksam;
+    } else if (vardiyaGunu == VardiyaGunu.cuma) {
+      // Cuma günleri her zaman hafta tatili
+      if (date.weekday == DateTime.friday) {
+        return ShiftType.tatil;
+      }
+
+      DateTime target = DateTime(date.year, date.month, date.day);
+      // 05.09.2026 - 10.09.2026 (Cumartesi - Perşembe): Gece vardiyası (24:30 - 09:30)
+      // 11.09.2026: Cuma Tatil
+      // Sonraki hafta: Akşam (16:30 - 24:30)
+      // Sonraki hafta: Sabah / Gündüz (09:30 - 16:30)
+      DateTime ref = DateTime(2026, 9, 5); // 5 Eylül 2026 Cumartesi (Gece vardiyası referansı)
+      int diffDays = target.difference(ref).inDays;
+      int weekIndex = (diffDays / 7).floor();
+      int cycle = (weekIndex % 3 + 3) % 3;
+
+      if (cycle == 0) return ShiftType.gece;
+      if (cycle == 1) return ShiftType.aksam;
+      return ShiftType.sabah;
     } else {
       // Çarşamba günleri her zaman hafta tatili
       if (date.weekday == DateTime.wednesday) {
@@ -84,6 +104,19 @@ class ShiftLogic {
         return "Akşam Vardiyası";
       case ShiftType.tatil:
         return "İzin Günü";
+    }
+  }
+
+  static String getBreakTime(ShiftType type) {
+    switch (type) {
+      case ShiftType.sabah:
+        return "12:00 - 12:30";
+      case ShiftType.gece:
+        return "03:00 - 03:30";
+      case ShiftType.aksam:
+        return "19:00 - 19:30";
+      case ShiftType.tatil:
+        return "Mola Yok";
     }
   }
 }

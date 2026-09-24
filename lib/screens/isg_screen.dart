@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../widgets/industrial_animations.dart';
 
 class IsgScreen extends StatefulWidget {
   const IsgScreen({super.key});
@@ -121,10 +122,18 @@ class _IsgScreenState extends State<IsgScreen> {
             ),
           ),
 
+          // Canlı İSG Kazasız Gün Sayacı & Güvenlik Kalkanı Animasyonu
+          const SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.only(top: 12),
+              child: SafetyDaysBannerWidget(daysWithoutAccident: 184),
+            ),
+          ),
+
           // Uyarı Kartı
           SliverToBoxAdapter(
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 20, 16, 0),
+              padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
               child: Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(

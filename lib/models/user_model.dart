@@ -16,6 +16,7 @@ class UserModel {
   String? photoPath;
   bool isVip;
   bool telsizYetkisi;
+  bool isYetkili;
 
   static const Map<String, JobDetails> jobRates = {
     'Liman İşçisi A': JobDetails(37500.0, 864.0, 2166.0, 1083.0),
@@ -31,6 +32,7 @@ class UserModel {
     this.photoPath,
     this.isVip = false,
     this.telsizYetkisi = false,
+    this.isYetkili = false,
   });
 
   JobDetails get currentJobDetails => jobRates[jobTitle] ?? jobRates['Liman İşçisi A']!;
@@ -51,6 +53,7 @@ class UserModel {
       photoPath: prefs.getString('photoPath'),
       isVip: prefs.getBool('isVip') ?? false,
       telsizYetkisi: prefs.getBool('telsizYetkisi') ?? false,
+      isYetkili: prefs.getBool('isYetkili') ?? false,
     );
   }
 
@@ -63,6 +66,7 @@ class UserModel {
     await prefs.setString('jobTitle', jobTitle);
     await prefs.setBool('isVip', isVip);
     await prefs.setBool('telsizYetkisi', telsizYetkisi);
+    await prefs.setBool('isYetkili', isYetkili);
     if (photoPath != null) {
       await prefs.setString('photoPath', photoPath!);
     }

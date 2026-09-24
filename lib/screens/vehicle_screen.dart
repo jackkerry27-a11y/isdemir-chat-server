@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import '../utils/pdf_font_helper.dart';
 
 class VehicleRecord {
   final String id;
@@ -100,156 +101,402 @@ class _VehicleScreenState extends State<VehicleScreen> {
       builder: (context) => StatefulBuilder(
         builder: (BuildContext context, StateSetter setModalState) {
           return Container(
-            height: MediaQuery.of(context).size.height * 0.75,
+            height: MediaQuery.of(context).size.height * 0.85,
             decoration: const BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.vertical(top: Radius.circular(30)),
+              color: Color(0xFF141416),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
             ),
             padding: EdgeInsets.only(
               bottom: MediaQuery.of(context).viewInsets.bottom,
-              top: 24,
+              top: 16,
               left: 24,
               right: 24,
             ),
-            child: SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 5,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 48,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF3F3F46),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 32),
+                
+                // Header row
+                Row(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
                       decoration: BoxDecoration(
-                        color: Colors.grey.shade300,
-                        borderRadius: BorderRadius.circular(10),
+                        color: const Color(0xFFE50914).withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.2)),
+                      ),
+                      child: const Icon(Icons.directions_car_rounded, color: Color(0xFFE50914), size: 28),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: RichText(
+                        text: const TextSpan(
+                          text: 'Yeni ',
+                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                          children: [
+                            TextSpan(
+                              text: 'Araç Girişi',
+                              style: TextStyle(color: Color(0xFFE50914)),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  const Text(
-                    'Yeni Araç Girişi',
-                    style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Color(0xFF1E293B)),
-                  ),
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Liman sahasına giren aracın operasyon bilgilerini seçin.',
-                    style: TextStyle(color: Color(0xFF64748B), fontSize: 13),
-                  ),
-                  const SizedBox(height: 24),
-                  // Bölge
-                  DropdownButtonFormField<String>(
-                    value: _destination,
-                    decoration: InputDecoration(
-                      labelText: 'Gittiği Bölge',
-                      prefixIcon: const Icon(Icons.place),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text(
+                  'Liman sahasına giren aracın operasyon bilgilerini seçin.',
+                  style: TextStyle(color: Color(0xFFA1A1AA), fontSize: 14),
+                ),
+                const SizedBox(height: 32),
+                
+                Expanded(
+                  child: SingleChildScrollView(
+                    child: Column(
+                      children: [
+                        // GİTTİĞİ BÖLGE
+                        _buildCustomDropdown(
+                          label: 'GİTTİĞİ BÖLGE',
+                          icon: Icons.place_rounded,
+                          value: _destination,
+                          items: _destinations,
+                          onChanged: (val) {
+                            setModalState(() => _destination = val!);
+                            setState(() => _destination = val!);
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // YÜK TİPİ
+                        _buildCustomDropdown(
+                          label: 'YÜK TİPİ',
+                          icon: Icons.inventory_2_rounded,
+                          value: _cargo,
+                          items: _cargoTypes,
+                          onChanged: (val) {
+                            setModalState(() => _cargo = val!);
+                            setState(() => _cargo = val!);
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // GİRİŞ SAATİ
+                        _buildCustomDatePicker(
+                          label: 'GİRİŞ SAATİ (OPSİYONEL)',
+                          date: manualEntryTime,
+                          isExit: false,
+                          onTap: () async {
+                            final date = await showDatePicker(
+                              context: context, 
+                              initialDate: manualEntryTime, 
+                              firstDate: DateTime(2000), 
+                              lastDate: DateTime(2100),
+                              builder: (context, child) => Theme(
+                                data: ThemeData.dark().copyWith(
+                                  colorScheme: const ColorScheme.dark(
+                                    primary: Color(0xFFE50914),
+                                    onPrimary: Colors.white,
+                                    surface: Color(0xFF1C1C22),
+                                    onSurface: Colors.white,
+                                  ),
+                                ),
+                                child: child!,
+                              ),
+                            );
+                            if (date != null) {
+                              if (!mounted) return;
+                              final time = await showTimePicker(
+                                context: context, 
+                                initialTime: TimeOfDay.fromDateTime(manualEntryTime),
+                                builder: (context, child) => Theme(
+                                  data: ThemeData.dark().copyWith(
+                                    colorScheme: const ColorScheme.dark(
+                                      primary: Color(0xFFE50914),
+                                      onPrimary: Colors.white,
+                                      surface: Color(0xFF1C1C22),
+                                      onSurface: Colors.white,
+                                    ),
+                                  ),
+                                  child: child!,
+                                ),
+                              );
+                              if (time != null) {
+                                setModalState(() {
+                                  manualEntryTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                                });
+                              }
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 16),
+                        
+                        // ÇIKIŞ SAATİ
+                        _buildCustomDatePicker(
+                          label: 'ÇIKIŞ SAATİ (OPSİYONEL)',
+                          date: manualExitTime,
+                          isExit: true,
+                          onTap: () async {
+                            final initialDate = manualExitTime ?? manualEntryTime;
+                            final date = await showDatePicker(
+                              context: context, 
+                              initialDate: initialDate, 
+                              firstDate: DateTime(2000), 
+                              lastDate: DateTime(2100),
+                              builder: (context, child) => Theme(
+                                data: ThemeData.dark().copyWith(
+                                  colorScheme: const ColorScheme.dark(
+                                    primary: Color(0xFFE50914),
+                                    onPrimary: Colors.white,
+                                    surface: Color(0xFF1C1C22),
+                                    onSurface: Colors.white,
+                                  ),
+                                ),
+                                child: child!,
+                              ),
+                            );
+                            if (date != null) {
+                              if (!mounted) return;
+                              final time = await showTimePicker(
+                                context: context, 
+                                initialTime: TimeOfDay.fromDateTime(initialDate),
+                                builder: (context, child) => Theme(
+                                  data: ThemeData.dark().copyWith(
+                                    colorScheme: const ColorScheme.dark(
+                                      primary: Color(0xFFE50914),
+                                      onPrimary: Colors.white,
+                                      surface: Color(0xFF1C1C22),
+                                      onSurface: Colors.white,
+                                    ),
+                                  ),
+                                  child: child!,
+                                ),
+                              );
+                              if (time != null) {
+                                setModalState(() {
+                                  manualExitTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+                                });
+                              }
+                            }
+                          },
+                        ),
+                        const SizedBox(height: 40),
+                      ],
                     ),
-                    items: _destinations.map((d) => DropdownMenuItem(value: d, child: Text(d))).toList(),
-                    onChanged: (val) {
-                      setModalState(() => _destination = val!);
-                      setState(() => _destination = val!);
-                    },
                   ),
-                  const SizedBox(height: 16),
-                  // Yük
-                  DropdownButtonFormField<String>(
-                    value: _cargo,
-                    decoration: InputDecoration(
-                      labelText: 'Yük Tipi',
-                      prefixIcon: const Icon(Icons.inventory_2),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
-                    ),
-                    items: _cargoTypes.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
-                    onChanged: (val) {
-                      setModalState(() => _cargo = val!);
-                      setState(() => _cargo = val!);
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  // Manuel Giriş Saati
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade400),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: ListTile(
-                      title: const Text('Giriş Saati (Opsiyonel)', style: TextStyle(fontSize: 14)),
-                      subtitle: Text(DateFormat('dd/MM/yyyy HH:mm').format(manualEntryTime)),
-                      trailing: const Icon(Icons.access_time),
-                      onTap: () async {
-                        final date = await showDatePicker(context: context, initialDate: manualEntryTime, firstDate: DateTime(2000), lastDate: DateTime(2100));
-                        if (date != null) {
-                          final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(manualEntryTime));
-                          if (time != null) {
-                            setModalState(() {
-                              manualEntryTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-                            });
-                          }
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 16),
-                  // Manuel Çıkış Saati
-                  Container(
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey.shade400),
-                      borderRadius: BorderRadius.circular(16),
-                    ),
-                    child: ListTile(
-                      title: const Text('Çıkış Saati (Opsiyonel)', style: TextStyle(fontSize: 14)),
-                      subtitle: Text(manualExitTime != null ? DateFormat('dd/MM/yyyy HH:mm').format(manualExitTime!) : 'Belirtilmedi (İçeride)'),
-                      trailing: const Icon(Icons.access_time),
-                      onTap: () async {
-                        final initialDate = manualExitTime ?? manualEntryTime;
-                        final date = await showDatePicker(context: context, initialDate: initialDate, firstDate: DateTime(2000), lastDate: DateTime(2100));
-                        if (date != null) {
-                          final time = await showTimePicker(context: context, initialTime: TimeOfDay.fromDateTime(initialDate));
-                          if (time != null) {
-                            setModalState(() {
-                              manualExitTime = DateTime(date.year, date.month, date.day, time.hour, time.minute);
-                            });
-                          }
-                        }
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 32),
-                  SizedBox(
+                ),
+                
+                // Submit Button
+                GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _records.insert(0, VehicleRecord(
+                        id: DateTime.now().millisecondsSinceEpoch.toString(),
+                        destination: _destination,
+                        cargoType: _cargo,
+                        entryTime: manualEntryTime,
+                        exitTime: manualExitTime,
+                      ));
+                    });
+                    _saveRecords();
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Araç girişi başarıyla kaydedildi.'), backgroundColor: Colors.green),
+                    );
+                  },
+                  child: Container(
                     width: double.infinity,
-                    child: ElevatedButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _records.insert(0, VehicleRecord(
-                            id: DateTime.now().millisecondsSinceEpoch.toString(),
-                            destination: _destination,
-                            cargoType: _cargo,
-                            entryTime: manualEntryTime,
-                            exitTime: manualExitTime,
-                          ));
-                        });
-                        _saveRecords();
-                        Navigator.pop(context);
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Araç girişi başarıyla kaydedildi.'), backgroundColor: Colors.green),
-                        );
-                      },
-                      icon: const Icon(Icons.login),
-                      label: const Text('ARAÇ GİRİŞİNİ YAP', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF10B981),
-                        foregroundColor: Colors.white,
-                        padding: const EdgeInsets.symmetric(vertical: 18),
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                    padding: const EdgeInsets.symmetric(vertical: 18),
+                    decoration: BoxDecoration(
+                      gradient: const LinearGradient(
+                        colors: [Color(0xFFE50914), Color(0xFF990000)],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
                       ),
+                      borderRadius: BorderRadius.circular(20),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFE50914).withValues(alpha: 0.3),
+                          blurRadius: 20,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.1),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Icon(Icons.login_rounded, color: Colors.white, size: 20),
+                        ),
+                        const SizedBox(width: 12),
+                        const Text(
+                          'ARAÇ GİRİŞİNİ YAP',
+                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                        ),
+                      ],
                     ),
                   ),
-                  const SizedBox(height: 20),
-                ],
-              ),
+                ),
+                const SizedBox(height: 12),
+              ],
             ),
           );
         }
+      ),
+    );
+  }
+
+  Widget _buildCustomDropdown({
+    required String label, 
+    required IconData icon, 
+    required String value, 
+    required List<String> items, 
+    required Function(String?) onChanged
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1C22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 4,
+                height: 4,
+                decoration: const BoxDecoration(color: Color(0xFFE50914), shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(color: Color(0xFFA1A1AA), fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141416),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: const Color(0xFFE50914), size: 20),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: DropdownButtonHideUnderline(
+                  child: DropdownButton<String>(
+                    value: value,
+                    dropdownColor: const Color(0xFF1C1C22),
+                    icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Color(0xFFE50914)),
+                    isExpanded: true,
+                    style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                    items: items.map((item) => DropdownMenuItem(value: item, child: Text(item))).toList(),
+                    onChanged: onChanged,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCustomDatePicker({
+    required String label, 
+    required DateTime? date,
+    required bool isExit,
+    required VoidCallback onTap
+  }) {
+    final dateFormat = DateFormat('dd/MM/yyyy');
+    final timeFormat = DateFormat('HH:mm');
+    
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1C1C22),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 4,
+                height: 4,
+                decoration: const BoxDecoration(color: Color(0xFFE50914), shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                label,
+                style: const TextStyle(color: Color(0xFFA1A1AA), fontSize: 11, fontWeight: FontWeight.w600, letterSpacing: 0.5),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          GestureDetector(
+            onTap: onTap,
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF141416),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.access_time_rounded, color: Color(0xFFE50914), size: 20),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        date != null ? dateFormat.format(date) : 'Belirtilmedi',
+                        style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        date != null ? timeFormat.format(date) : 'İçeride',
+                        style: TextStyle(color: isExit && date == null ? const Color(0xFFA1A1AA) : const Color(0xFFE50914), fontSize: 13, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.calendar_today_outlined, color: Color(0xFFE50914), size: 20),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -323,22 +570,11 @@ class _VehicleScreenState extends State<VehicleScreen> {
       return;
     }
 
-    final pdf = pw.Document();
+    final pdfTheme = await PdfFontHelper.getTheme();
+    final pdf = pw.Document(theme: pdfTheme);
 
     String normalizeTr(String text) {
-      return text
-          .replaceAll('ı', 'i')
-          .replaceAll('İ', 'I')
-          .replaceAll('ğ', 'g')
-          .replaceAll('Ğ', 'G')
-          .replaceAll('ü', 'u')
-          .replaceAll('Ü', 'U')
-          .replaceAll('ş', 's')
-          .replaceAll('Ş', 'S')
-          .replaceAll('ö', 'o')
-          .replaceAll('Ö', 'O')
-          .replaceAll('ç', 'c')
-          .replaceAll('Ç', 'C');
+      return PdfFontHelper.sanitize(text);
     }
 
     final logoSvg = '''<svg viewBox="0 0 24 24" width="24" height="24"><path d="M4 6h4v12H4zm6-4h4v20h-4zm6 4h4v12h-4z" fill="#0B2B6D"/></svg>''';
@@ -604,10 +840,11 @@ class _VehicleScreenState extends State<VehicleScreen> {
     }
   }
 
+
   @override
   Widget build(BuildContext context) {
-    final topBgColor = const Color(0xFF0F172A); // App theme dark blue
-    final pageBgColor = const Color(0xFFF8F9FA);
+    final topBgColor = const Color(0xFF0F0F13); // Deep dark
+    final pageBgColor = const Color(0xFF0F0F13);
 
     List<VehicleRecord> filteredRecords = _records;
     if (_selectedTab == 1) {
@@ -621,203 +858,311 @@ class _VehicleScreenState extends State<VehicleScreen> {
     final int insideCount = _records.where((r) => r.isInside).length;
 
     return Scaffold(
-      backgroundColor: topBgColor, // We use topBgColor for scaffold, and a rounded white container for the bottom part
-      body: Column(
+      backgroundColor: topBgColor,
+      body: Stack(
         children: [
-          // CUSTOM APP BAR
-          SafeArea(
-            bottom: false,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-              child: Row(
-                children: [
-                  GestureDetector(
-                    onTap: () => Navigator.pop(context),
-                    child: Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(14),
-                      ),
-                      child: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
-                    ),
+          // Background Gradient Image
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 350,
+            child: Stack(
+              children: [
+                SizedBox.expand(
+                  child: Image.asset(
+                    'assets/images/factory_bg.jpg',
+                    fit: BoxFit.cover,
                   ),
-                  const SizedBox(width: 16),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text('Araç Giriş / Çıkış', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-                        SizedBox(height: 4),
-                        Text('Tüm giriş ve çıkış kayıtlarını kolayca görüntüleyin.', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                ),
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        const Color(0xFFE50914).withValues(alpha: 0.15),
+                        const Color(0xFF0F0F13).withValues(alpha: 0.8),
+                        const Color(0xFF0F0F13),
                       ],
                     ),
                   ),
-                  // Bell icon removed as requested
-                ],
-              ),
+                ),
+              ],
             ),
           ),
           
-          // STATS CARD
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-            child: Container(
-              padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
-              decoration: BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.circular(24),
+          Column(
+            children: [
+              // CUSTOM APP BAR
+              SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                  child: Row(
+                    children: [
+                      GestureDetector(
+                        onTap: () => Navigator.pop(context),
+                        child: Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.black.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(14),
+                          ),
+                          child: const Icon(Icons.arrow_back, color: Colors.white, size: 22),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Text('Araç Giriş / Çıkış', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                            SizedBox(height: 4),
+                            Text('Tüm giriş ve çıkış kayıtlarını kolayca görüntüleyin.', style: TextStyle(color: Colors.white54, fontSize: 11)),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
-              child: Row(
-                children: [
-                  Expanded(child: _buildNewStatItem('Günlük Giriş', todayEntries.toString(), Icons.login_rounded, const Color(0xFF10B981))),
-                  Container(width: 1, height: 50, color: Colors.grey.shade200),
-                  Expanded(child: _buildNewStatItem('İçerideki Araç', insideCount.toString(), Icons.directions_car_rounded, const Color(0xFF3B82F6))),
-                  Container(width: 1, height: 50, color: Colors.grey.shade200),
-                  Expanded(child: _buildNewStatItem('Günlük Çıkış', todayExits.toString(), Icons.logout_rounded, const Color(0xFFF59E0B))),
-                ],
+              
+              // STATS CARD
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C1C22),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.2)),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(child: _buildNewStatItem('Günlük Giriş', todayEntries.toString(), Icons.login_rounded, const Color(0xFFE50914))),
+                      Container(width: 1, height: 50, color: Colors.white.withValues(alpha: 0.1)),
+                      Expanded(child: _buildNewStatItem('İçerideki Araç', insideCount.toString(), Icons.directions_car_rounded, const Color(0xFFE50914))),
+                      Container(width: 1, height: 50, color: Colors.white.withValues(alpha: 0.1)),
+                      Expanded(child: _buildNewStatItem('Günlük Çıkış', todayExits.toString(), Icons.logout_rounded, const Color(0xFFE50914))),
+                    ],
+                  ),
+                ),
               ),
-            ),
+
+              const SizedBox(height: 10),
+
+              // TABS & LIST SECTION
+              Expanded(
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: pageBgColor,
+                  ),
+                  child: Column(
+                    children: [
+                      // TABS
+                      Padding(
+                        padding: const EdgeInsets.only(top: 10, left: 20, right: 20, bottom: 16),
+                        child: Container(
+                          padding: const EdgeInsets.all(4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1C1C22),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Row(
+                            children: [
+                              _buildNewTabItem(0, 'Tümü', null),
+                              _buildNewTabItem(1, 'İçeridekiler', Icons.directions_car_rounded),
+                              _buildNewTabItem(2, 'Çıkanlar', Icons.logout_rounded),
+                            ],
+                          ),
+                        ),
+                      ),
+                      
+                      // LIST
+                      Expanded(
+                        child: filteredRecords.isEmpty
+                            ? Center(
+                                child: Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.all(24),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF1C1C22),
+                                        shape: BoxShape.circle,
+                                        boxShadow: [
+                                          BoxShadow(
+                                            color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                                            blurRadius: 30,
+                                            spreadRadius: 5,
+                                          )
+                                        ],
+                                      ),
+                                      child: const Icon(Icons.directions_car_rounded, size: 48, color: Color(0xFFE50914)),
+                                    ),
+                                    const SizedBox(height: 24),
+                                    const Text(
+                                      'Henüz araç kaydı bulunmuyor',
+                                      style: TextStyle(color: Color(0xFFA1A1AA), fontSize: 14, fontWeight: FontWeight.w500),
+                                    ),
+                                  ],
+                                ),
+                              )
+                            : ListView.builder(
+                                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                                itemCount: filteredRecords.length,
+                                itemBuilder: (context, index) {
+                                  return _buildNewRecordCard(filteredRecords[index]);
+                                },
+                              ),
+                      ),
+
+                      // BOTTOM BUTTONS KALDARILDI - YERİNE FAB EKLENDİ
+
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(
+        onPressed: _showBottomMenu,
+        backgroundColor: const Color(0xFFE50914),
+        elevation: 4,
+        child: const Icon(Icons.add, color: Colors.white, size: 28),
+      ),
+    );
+  }
 
-          const SizedBox(height: 10),
-
-          // TABS & LIST SECTION (White Background with rounded top)
-          Expanded(
-            child: Container(
-              decoration: BoxDecoration(
-                color: pageBgColor,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-              ),
-              child: Column(
-                children: [
-                  // TABS
-                  Padding(
-                    padding: const EdgeInsets.only(top: 24, left: 20, right: 20, bottom: 16),
-                    child: Row(
-                      children: [
-                        _buildNewTabItem(0, 'Tümü', null),
-                        const SizedBox(width: 8),
-                        _buildNewTabItem(1, 'İçeridekiler', Icons.directions_car_rounded),
-                        const SizedBox(width: 8),
-                        _buildNewTabItem(2, 'Çıkanlar', Icons.logout_rounded),
-                      ],
-                    ),
+  void _showBottomMenu() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF141416),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  _generateAndSharePDF();
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1C1C22),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
                   ),
-                  
-                  // LIST
-                  Expanded(
-                    child: filteredRecords.isEmpty
-                        ? Center(
-                            child: Column(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Icon(Icons.inbox_rounded, size: 48, color: Colors.grey.shade300),
-                                const SizedBox(height: 12),
-                                const Text(
-                                  'Henüz araç kaydı bulunmuyor',
-                                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14, fontWeight: FontWeight.w500),
-                                ),
-                              ],
-                            ),
-                          )
-                        : ListView.builder(
-                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                            itemCount: filteredRecords.length,
-                            itemBuilder: (context, index) {
-                              return _buildNewRecordCard(filteredRecords[index]);
-                            },
-                          ),
-                  ),
-
-                  // BOTTOM BUTTONS
-                  Container(
-                    padding: const EdgeInsets.fromLTRB(20, 10, 20, 30),
-                    child: Column(
-                      children: [
-                        // PDF Button
-                        GestureDetector(
-                          onTap: _generateAndSharePDF,
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 5))],
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 48,
-                                  height: 48,
-                                  decoration: BoxDecoration(
-                                    color: const Color(0xFF10B981),
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white),
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: const [
-                                      Text('Tüm Bilgileri Kaydet', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Color(0xFF1E293B))),
-                                      SizedBox(height: 2),
-                                      Text('Tüm kayıtları PDF olarak dışa aktarın', style: TextStyle(fontSize: 12, color: Color(0xFF64748B))),
-                                    ],
-                                  ),
-                                ),
-                                const Icon(Icons.chevron_right_rounded, color: Color(0xFF94A3B8)),
-                              ],
-                            ),
-                          ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        
-                        const SizedBox(height: 12),
-                        
-                        // New Entry Button
-                        GestureDetector(
-                          onTap: _showAddVehicleModal,
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF3B82F6),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [BoxShadow(color: const Color(0xFF3B82F6).withValues(alpha: 0.3), blurRadius: 15, offset: const Offset(0, 8))],
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 48,
-                                  height: 48,
-                                  decoration: BoxDecoration(
-                                    color: Colors.white,
-                                    borderRadius: BorderRadius.circular(14),
-                                  ),
-                                  child: const Icon(Icons.add, color: Color(0xFF3B82F6), size: 28),
-                                ),
-                                const SizedBox(width: 16),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: const [
-                                      Text('Yeni Giriş', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white)),
-                                      SizedBox(height: 2),
-                                      Text('Yeni araç giriş kaydı oluşturun', style: TextStyle(fontSize: 12, color: Colors.white70)),
-                                    ],
-                                  ),
-                                ),
-                                const Icon(Icons.chevron_right_rounded, color: Colors.white),
-                              ],
-                            ),
-                          ),
+                        child: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Text('Tüm Bilgileri Kaydet', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white)),
+                            SizedBox(height: 2),
+                            Text('Tüm kayıtları PDF olarak dışa aktarın', style: TextStyle(fontSize: 12, color: Color(0xFFA1A1AA))),
+                          ],
                         ),
-                      ],
-                    ),
+                      ),
+                      const Icon(Icons.chevron_right_rounded, color: Color(0xFFA1A1AA)),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
+              const SizedBox(height: 12),
+              GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  _showAddVehicleModal();
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFFE50914), Color(0xFF990000)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(20),
+                    boxShadow: [BoxShadow(color: const Color(0xFFE50914).withValues(alpha: 0.4), blurRadius: 15, offset: const Offset(0, 8))],
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: const Icon(Icons.add, color: Colors.white, size: 28),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: const [
+                            Text('Yeni Giriş', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white)),
+                            SizedBox(height: 2),
+                            Text('Yeni araç giriş kaydı oluşturun', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.chevron_right_rounded, color: Colors.white),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _deleteRecord(VehicleRecord record) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1C1C22),
+        title: const Text('Silmeyi Onayla', style: TextStyle(color: Colors.white)),
+        content: const Text('Bu araç kaydını silmek istediğinize emin misiniz?', style: TextStyle(color: Color(0xFFA1A1AA))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('İptal', style: TextStyle(color: Color(0xFFA1A1AA))),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFE50914), foregroundColor: Colors.white),
+            onPressed: () {
+              setState(() {
+                _records.remove(record);
+              });
+              _saveRecords();
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Kayıt silindi.'), backgroundColor: Colors.red),
+              );
+            },
+            child: const Text('Sil'),
           ),
         ],
       ),
@@ -836,9 +1181,9 @@ class _VehicleScreenState extends State<VehicleScreen> {
           child: Icon(icon, color: color, size: 24),
         ),
         const SizedBox(height: 12),
-        Text(value, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color)),
+        Text(value, style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
         const SizedBox(height: 4),
-        Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFF64748B)), textAlign: TextAlign.center),
+        Text(title, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600, color: Color(0xFFA1A1AA)), textAlign: TextAlign.center),
       ],
     );
   }
@@ -851,8 +1196,8 @@ class _VehicleScreenState extends State<VehicleScreen> {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 12),
           decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFF0F172A) : Colors.transparent,
-            borderRadius: BorderRadius.circular(16),
+            color: isSelected ? const Color(0xFFE50914) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -861,7 +1206,7 @@ class _VehicleScreenState extends State<VehicleScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   if (icon != null) ...[
-                    Icon(icon, size: 16, color: isSelected ? Colors.white : const Color(0xFF64748B)),
+                    Icon(icon, size: 16, color: isSelected ? Colors.white : const Color(0xFFA1A1AA)),
                     const SizedBox(width: 6),
                   ],
                   Text(
@@ -869,15 +1214,11 @@ class _VehicleScreenState extends State<VehicleScreen> {
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
-                      color: isSelected ? Colors.white : const Color(0xFF64748B),
+                      color: isSelected ? Colors.white : const Color(0xFFA1A1AA),
                     ),
                   ),
                 ],
               ),
-              if (isSelected) ...[
-                const SizedBox(height: 6),
-                Container(width: 24, height: 3, decoration: BoxDecoration(color: const Color(0xFF10B981), borderRadius: BorderRadius.circular(2))),
-              ]
             ],
           ),
         ),
@@ -911,11 +1252,9 @@ class _VehicleScreenState extends State<VehicleScreen> {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: const Color(0xFF1C1C22),
         borderRadius: BorderRadius.circular(24),
-        boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10, offset: const Offset(0, 4)),
-        ],
+        border: Border(left: BorderSide(color: record.isInside ? const Color(0xFF10B981) : const Color(0xFFE50914), width: 4)),
       ),
       padding: const EdgeInsets.all(20),
       child: Column(
@@ -927,12 +1266,12 @@ class _VehicleScreenState extends State<VehicleScreen> {
                 width: 48,
                 height: 48,
                 decoration: BoxDecoration(
-                  color: record.isInside ? const Color(0xFFECFDF5) : const Color(0xFFF1F5F9),
+                  color: record.isInside ? const Color(0xFF10B981).withValues(alpha: 0.1) : const Color(0xFFE50914).withValues(alpha: 0.1),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
                   Icons.check_rounded,
-                  color: record.isInside ? const Color(0xFF10B981) : const Color(0xFF94A3B8),
+                  color: record.isInside ? const Color(0xFF10B981) : const Color(0xFFE50914),
                   size: 28,
                 ),
               ),
@@ -941,17 +1280,17 @@ class _VehicleScreenState extends State<VehicleScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('Araç İşlemi', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
+                    const Text('Araç İşlemi', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
                     const SizedBox(height: 6),
                     Row(
                       children: [
-                        const Icon(Icons.place, size: 14, color: Color(0xFF3B82F6)),
+                        const Icon(Icons.place, size: 14, color: Color(0xFFE50914)),
                         const SizedBox(width: 4),
-                        Text(record.destination, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B))),
+                        Text(record.destination, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white70)),
                         const SizedBox(width: 16),
-                        const Icon(Icons.inventory_2_rounded, size: 14, color: Color(0xFFF59E0B)),
+                        const Icon(Icons.inventory_2_rounded, size: 14, color: Color(0xFFE50914)),
                         const SizedBox(width: 4),
-                        Text(record.cargoType, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Color(0xFF1E293B))),
+                        Text(record.cargoType, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white70)),
                       ],
                     ),
                   ],
@@ -960,22 +1299,34 @@ class _VehicleScreenState extends State<VehicleScreen> {
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFFECFDF5),
+                  color: const Color(0xFFE50914).withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.timer_outlined, size: 14, color: Color(0xFF10B981)),
+                    const Icon(Icons.timer_outlined, size: 14, color: Color(0xFFE50914)),
                     const SizedBox(width: 4),
-                    Text(durationStr, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF10B981))),
+                    Text(durationStr, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFFE50914))),
                   ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              GestureDetector(
+                onTap: () => _deleteRecord(record),
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.05),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.delete_outline_rounded, color: Color(0xFFA1A1AA), size: 18),
                 ),
               ),
             ],
           ),
           
           const SizedBox(height: 16),
-          const Divider(height: 1, color: Color(0xFFF1F5F9)),
+          Divider(height: 1, color: Colors.white.withValues(alpha: 0.05)),
           const SizedBox(height: 16),
           
           // Bottom Row
@@ -991,16 +1342,16 @@ class _VehicleScreenState extends State<VehicleScreen> {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Giriş', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
-                        Text(entryTimeStr, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Color(0xFF1E293B))),
-                        Text(entryDateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+                        const Text('Giriş', style: TextStyle(fontSize: 11, color: Color(0xFFA1A1AA))),
+                        Text(entryTimeStr, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+                        Text(entryDateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF71717A))),
                       ],
                     ),
                   ],
                 ),
               ),
               
-              Container(width: 1, height: 40, color: const Color(0xFFF1F5F9)),
+              Container(width: 1, height: 40, color: Colors.white.withValues(alpha: 0.05)),
               const SizedBox(width: 16),
               
               // Exit
@@ -1008,14 +1359,14 @@ class _VehicleScreenState extends State<VehicleScreen> {
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.logout_rounded, size: 18, color: Color(0xFFF59E0B)),
+                    const Icon(Icons.logout_rounded, size: 18, color: Color(0xFFE50914)),
                     const SizedBox(width: 8),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text('Çıkış', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
-                        Text(exitTimeStr, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: record.isInside ? const Color(0xFF94A3B8) : const Color(0xFF1E293B))),
-                        Text(exitDateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8))),
+                        const Text('Çıkış', style: TextStyle(fontSize: 11, color: Color(0xFFA1A1AA))),
+                        Text(exitTimeStr, style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: record.isInside ? const Color(0xFF71717A) : Colors.white)),
+                        Text(exitDateStr, style: const TextStyle(fontSize: 11, color: Color(0xFF71717A))),
                       ],
                     ),
                   ],
@@ -1029,14 +1380,14 @@ class _VehicleScreenState extends State<VehicleScreen> {
                   child: Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF59E0B),
+                      color: const Color(0xFFE50914),
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: const Text('Çıkış Ver', style: TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
                   ),
                 )
               else
-                const Icon(Icons.chevron_right_rounded, color: Color(0xFFCBD5E1)),
+                const Icon(Icons.chevron_right_rounded, color: Color(0xFF3F3F46)),
             ],
           ),
         ],
@@ -1044,5 +1395,3 @@ class _VehicleScreenState extends State<VehicleScreen> {
     );
   }
 }
-
-

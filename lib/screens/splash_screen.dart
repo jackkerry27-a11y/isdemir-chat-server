@@ -122,6 +122,51 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
   }
 
   Future<bool> _checkForceUpdate() async {
+    // 1. Önce bu cihaza atanmış özel bir erken erişim/beta güncellemesi var mı kontrol et
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final cihazId = prefs.getString('cihaz_id');
+      if (cihazId != null && cihazId.isNotEmpty) {
+        final query = await FirebaseFirestore.instance
+            .collection('personeller')
+            .where('cihaz_id', isEqualTo: cihazId)
+            .limit(1)
+            .get()
+            .timeout(const Duration(milliseconds: 1800));
+
+        if (query.docs.isNotEmpty) {
+          final data = query.docs.first.data();
+          if (data.containsKey('ozel_guncelleme') && data['ozel_guncelleme'] is Map) {
+            final ozel = Map<String, dynamic>.from(data['ozel_guncelleme'] as Map);
+            final bool isAktif = ozel['aktif'] == true;
+            final int targetVer = ozel['versiyon_kodu'] is int
+                ? ozel['versiyon_kodu'] as int
+                : int.tryParse('${ozel['versiyon_kodu']}') ?? 0;
+            final String downloadUrl = ozel['download_url'] as String? ?? '';
+            final String customNotes = ozel['notlar'] as String? ?? 'Kişiye özel test güncellemesi';
+
+            if (isAktif && targetVer > AppConfig.currentVersion && downloadUrl.isNotEmpty) {
+              if (!mounted) return false;
+              showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (context) => _UpdateDialogWidget(
+                  downloadUrl: downloadUrl,
+                  latestVersion: targetVer,
+                  isTargetedBeta: true,
+                  customNotes: customNotes,
+                ),
+              );
+              return true; // Halt navigation for targeted update
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[TargetedUpdateCheck] Hata: $e');
+    }
+
+    // 2. Özel güncelleme yoksa standart genel sürüm kontrolünü yap
     try {
       final response = await http.get(
         Uri.parse('${SocketService.serverUrl}/version'),
@@ -142,7 +187,10 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
           showDialog(
             context: context,
             barrierDismissible: false,
-            builder: (context) => _UpdateDialogWidget(downloadUrl: downloadUrl),
+            builder: (context) => _UpdateDialogWidget(
+              downloadUrl: downloadUrl,
+              latestVersion: latestVersion,
+            ),
           );
           return true; // Halt navigation
         }
@@ -191,20 +239,12 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       });
     }
 
-    final bool hasForceReloginV7 = prefs.getBool('force_relogin_v7') ?? false;
-    if (!hasForceReloginV7) {
-      await prefs.remove('cihaz_id');
-      await UserModel.clear();
-      await prefs.setBool('force_relogin_v7', true);
-    }
-    
     final cihazId = prefs.getString('cihaz_id');
 
+    // Kayıtlı kullanıcı varsa her zaman doğrudan MainScreen'e yönlendir (asla kayıt ekranına atma)
     Widget nextScreen = user != null ? MainScreen(user: user) : const RegisterScreen();
 
-    if (cihazId == null) {
-      nextScreen = const RegisterScreen();
-    } else {
+    if (cihazId != null && cihazId.isNotEmpty) {
       try {
         // Hızlı paralel kontroller (Maksimum 1.8 sn bekleme)
         final updateCheck = _checkUpdates();
@@ -220,11 +260,7 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         if (shouldHalt) return;
 
         final querySnapshot = results[1] as QuerySnapshot<Map<String, dynamic>>?;
-        if (querySnapshot != null) {
-          if (querySnapshot.docs.isEmpty) {
-            await UserModel.clear();
-            nextScreen = const RegisterScreen();
-          } else {
+        if (querySnapshot != null && querySnapshot.docs.isNotEmpty) {
             final response = querySnapshot.docs.first.data();
             final docRef = querySnapshot.docs.first.reference;
             // 🚀 Uygulama Sürümünü (v9.0) ve Son Giriş Zamanını Anlık Firestore'a Kaydet
@@ -268,7 +304,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
               nextScreen = const ApprovalScreen();
             }
           }
-        }
       } catch (_) {
         // İnternet yavaşsa veya timeout olursa cihazdaki kayıtlı kullanıcıyla anında geç
         if (user != null) {
@@ -1106,7 +1141,16 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
 class _UpdateDialogWidget extends StatefulWidget {
   final String downloadUrl;
-  const _UpdateDialogWidget({required this.downloadUrl});
+  final int latestVersion;
+  final bool isTargetedBeta;
+  final String? customNotes;
+
+  const _UpdateDialogWidget({
+    required this.downloadUrl,
+    required this.latestVersion,
+    this.isTargetedBeta = false,
+    this.customNotes,
+  });
 
   @override
   State<_UpdateDialogWidget> createState() => _UpdateDialogWidgetState();
@@ -1129,16 +1173,25 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
 
   Future<String> _getApkPath() async {
     final dir = await getTemporaryDirectory();
-    return '${dir.path}/isdemir_update_v5.apk';
+    return '${dir.path}/isdemir_update_v${widget.latestVersion}.apk';
   }
 
   Future<void> _checkExistingApk() async {
     try {
+      final dir = await getTemporaryDirectory();
+      // Önceki eski sürümlerden kalan tüm apk kalıntılarını temizle
+      final entities = dir.listSync();
+      for (final e in entities) {
+        if (e is File && e.path.contains('isdemir_update_') && !e.path.endsWith('v${widget.latestVersion}.apk')) {
+          try { e.deleteSync(); } catch (_) {}
+        }
+      }
       final path = await _getApkPath();
       final file = File(path);
       if (await file.exists()) {
         final len = await file.length();
-        if (len > 30 * 1024 * 1024) {
+        // Gerçek release APK ~187MB, 100MB'tan küçükse eksiktir, temizle
+        if (len > 100 * 1024 * 1024) {
           if (mounted) {
             setState(() {
               savedApkPath = path;
@@ -1146,6 +1199,8 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
               progress = 1.0;
             });
           }
+        } else {
+          try { await file.delete(); } catch (_) {}
         }
       }
     } catch (_) {}
@@ -1372,50 +1427,109 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
     }
 
     if (isDownloaded) {
-      return Container(
-        height: 56,
-        width: double.infinity,
-        decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), color: const Color(0xFF10B981)),
-        child: Material(
-          color: Colors.transparent,
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: _startDownload,
-            child: const Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(Icons.install_mobile_rounded, color: Colors.white, size: 20),
-                SizedBox(width: 8),
-                Text('Kurulumu Başlat', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
-              ],
+      return Column(
+        children: [
+          Container(
+            height: 56,
+            width: double.infinity,
+            decoration: BoxDecoration(borderRadius: BorderRadius.circular(16), color: const Color(0xFF10B981)),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(16),
+                onTap: _startDownload,
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.install_mobile_rounded, color: Colors.white, size: 20),
+                    SizedBox(width: 8),
+                    Text('Kurulumu Başlat', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+              ),
             ),
           ),
-        ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      isDownloaded = false;
+                      savedApkPath = null;
+                    });
+                    _startDownload();
+                  },
+                  icon: const Icon(Icons.refresh_rounded, size: 16, color: Color(0xFF94A3B8)),
+                  label: const Text('Tekrar İndir', style: TextStyle(color: Color(0xFFCBD5E1), fontSize: 12)),
+                  style: OutlinedButton.styleFrom(
+                    side: const BorderSide(color: Color(0xFF334155)),
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: _openInBrowser,
+                  icon: const Icon(Icons.open_in_browser_rounded, size: 16),
+                  label: const Text('Tarayıcıda Aç', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF3B82F6),
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 11),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
       );
     }
 
-    return Container(
-      height: 56,
-      width: double.infinity,
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(16),
-        gradient: const LinearGradient(colors: [Color(0xFF8B5CF6), Color(0xFF3B82F6)], begin: Alignment.centerLeft, end: Alignment.centerRight),
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: _startDownload,
-          child: const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.arrow_downward_rounded, color: Colors.white, size: 20),
-              SizedBox(width: 8),
-              Text('Güncellemeyi İndir', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
-            ],
+    return Column(
+      children: [
+        Container(
+          height: 56,
+          width: double.infinity,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            gradient: const LinearGradient(colors: [Color(0xFF8B5CF6), Color(0xFF3B82F6)], begin: Alignment.centerLeft, end: Alignment.centerRight),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: _startDownload,
+              child: const Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.arrow_downward_rounded, color: Colors.white, size: 20),
+                  SizedBox(width: 8),
+                  Text('Güncellemeyi İndir', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                ],
+              ),
+            ),
           ),
         ),
-      ),
+        const SizedBox(height: 10),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            onPressed: _openInBrowser,
+            icon: const Icon(Icons.open_in_browser_rounded, size: 18, color: Color(0xFF38BDF8)),
+            label: const Text('Tarayıcı İle Doğrudan İndir', style: TextStyle(color: Color(0xFF38BDF8), fontSize: 13, fontWeight: FontWeight.bold)),
+            style: OutlinedButton.styleFrom(
+              side: const BorderSide(color: Color(0xFF0284C7)),
+              padding: const EdgeInsets.symmetric(vertical: 11),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -1474,25 +1588,35 @@ class _UpdateDialogWidgetState extends State<_UpdateDialogWidget> {
                         right: -12,
                         child: Container(
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                          decoration: BoxDecoration(color: const Color(0xFF6366F1), borderRadius: BorderRadius.circular(20)),
-                          child: const Text('YENİ', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
+                          decoration: BoxDecoration(
+                            color: widget.isTargetedBeta ? const Color(0xFFF59E0B) : const Color(0xFF6366F1),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Text(
+                            widget.isTargetedBeta ? '⭐ ERKEN ERİŞİM' : 'YENİ',
+                            style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                          ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 32),
-                  const Text('Yeni bir sürüm mevcut!', style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold)),
+                  Text(
+                    widget.isTargetedBeta ? 'Kişiye Özel Beta Sürümü!' : 'Yeni bir sürüm mevcut!',
+                    style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                  ),
                   const SizedBox(height: 12),
-                  const Text(
-                    'Daha iyi bir deneyim için uygulamamızı\ngüncellemenizi öneriyoruz.',
+                  Text(
+                    widget.customNotes ??
+                        'Daha iyi bir deneyim için uygulamamızı\ngüncellemenizi öneriyoruz.',
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14, height: 1.5),
+                    style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14, height: 1.5),
                   ),
                   const SizedBox(height: 24),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     decoration: BoxDecoration(color: const Color(0xFF1E293B), borderRadius: BorderRadius.circular(20)),
-                    child: Text('v${AppConfig.currentVersion + 1}.0.0 • 45.6 MB', style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 13, fontWeight: FontWeight.w500)),
+                    child: Text('v${widget.latestVersion}.0 • 187 MB', style: const TextStyle(color: Color(0xFFCBD5E1), fontSize: 13, fontWeight: FontWeight.w500)),
                   ),
                   const SizedBox(height: 32),
                   Container(

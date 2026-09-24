@@ -30,7 +30,7 @@ android {
         versionName = flutter.versionName
 
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86_64"))
         }
     }
 
@@ -43,12 +43,6 @@ android {
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
-        jniLibs {
-            excludes.addAll(listOf(
-                "lib/x86/**",
-                "lib/x86_64/**"
-            ))
         }
     }
 }

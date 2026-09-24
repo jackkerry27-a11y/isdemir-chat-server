@@ -1,10 +1,11 @@
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:uuid/uuid.dart';
+import 'package:onesignal_flutter/onesignal_flutter.dart';
 import '../models/user_model.dart';
 import 'approval_screen.dart';
 
@@ -21,26 +22,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String _lastName = '';
   String _jobTitle = 'Liman İşçisi A';
   File? _imageFile;
-  final ImagePicker _picker = ImagePicker();
-
   String? _base64Image;
-
-  Future<void> _pickImage() async {
-    final XFile? pickedFile = await _picker.pickImage(
-      source: ImageSource.gallery,
-      maxWidth: 150,
-      maxHeight: 150,
-      imageQuality: 60,
-    );
-    if (pickedFile != null) {
-      final bytes = await File(pickedFile.path).readAsBytes();
-      final base64String = 'base64:' + base64Encode(bytes);
-      setState(() {
-        _imageFile = File(pickedFile.path);
-        _base64Image = base64String;
-      });
-    }
-  }
 
   void _register() async {
     if (_formKey.currentState!.validate()) {
@@ -59,19 +41,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
           cihazId = const Uuid().v4();
           await prefs.setString('cihaz_id', cihazId);
         }
+        OneSignal.login(cihazId);
 
         final adSoyad = '$_firstName $_lastName';
         
         final selectedJob = UserModel.jobRates[_jobTitle];
         final tabanMaas = selectedJob?.baseSalary ?? 30000.0;
 
-        // Supabase'e kayıt atalım
-        await Supabase.instance.client.from('personel').insert({
+        // Firestore'a kayıt atalım
+        await FirebaseFirestore.instance.collection('personeller').add({
           'ad_soyad': adSoyad,
           'cihaz_id': cihazId,
           'durum': 'onay_bekliyor',
           'meslek': _jobTitle,
-          'taban_maas': tabanMaas
+          'taban_maas': tabanMaas,
+          'is_vip': false,
+          'kayit_tarihi': FieldValue.serverTimestamp(),
         });
 
         // Modeli lokale de kaydedelim (eski kod uyumluluğu için)
@@ -101,34 +86,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF3F4F6),
+      backgroundColor: const Color(0xFFFAFAFA),
       body: SingleChildScrollView(
         child: Stack(
           clipBehavior: Clip.none,
           children: [
-            // Arka plan mavi/mor alan
+            // Arka plan kırmızı alan
             Container(
-              height: 260,
+              height: 320,
               width: double.infinity,
               decoration: const BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [Color(0xFF2E1065), Color(0xFF4338CA), Color(0xFF3B82F6)],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF7A0000), Color(0xFFE50914)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
                 ),
               ),
-            ),
-            
-            // Dekoratif yuvarlak şekiller (Tasarımı zenginleştirmek için)
-            Positioned(
-              right: -50,
-              top: -50,
-              child: Container(width: 200, height: 200, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withValues(alpha: 0.05))),
-            ),
-            Positioned(
-              left: -30,
-              top: 150,
-              child: Container(width: 150, height: 150, decoration: BoxDecoration(shape: BoxShape.circle, color: Colors.white.withValues(alpha: 0.05))),
+              child: Opacity(
+                opacity: 0.15,
+                child: Image.asset(
+                  'assets/images/factory_bg.jpg',
+                  fit: BoxFit.cover,
+                ),
+              ),
             ),
 
             // İçerik (Header)
@@ -139,11 +119,23 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
-                      onPressed: () => Navigator.pop(context),
+                    Container(
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: IconButton(
+                        icon: const Icon(Icons.arrow_back_rounded, color: Colors.white, size: 20),
+                        onPressed: () => Navigator.pop(context),
+                      ),
                     ),
-                    const Text('İşdemir OS Kayıt', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
+                    Column(
+                      children: [
+                        Text('İşdemir OS Kayıt', style: GoogleFonts.inter(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w700)),
+                        const SizedBox(height: 4),
+                        Text('Hesabınızı oluşturun', style: GoogleFonts.inter(color: Colors.white70, fontSize: 13, fontWeight: FontWeight.w500)),
+                      ],
+                    ),
                     const SizedBox(width: 48), // Balance for back button
                   ],
                 ),
@@ -152,9 +144,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
             
             // Beyaz İçerik Alanı
             Container(
-              margin: const EdgeInsets.only(top: 180),
+              margin: const EdgeInsets.only(top: 200),
               constraints: BoxConstraints(
-                minHeight: MediaQuery.of(context).size.height - 180,
+                minHeight: MediaQuery.of(context).size.height - 200,
               ),
               decoration: const BoxDecoration(
                 color: Colors.white,
@@ -166,62 +158,66 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   key: _formKey,
                   child: Column(
                     children: [
-                      const Text('Profil Fotoğrafı', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1E293B))),
-                      const SizedBox(height: 4),
-                      const Text('Seç (Opsiyonel)', style: TextStyle(color: Color(0xFF64748B), fontSize: 13)),
+                      Text('Profil Bilgilerinizi Girin', style: GoogleFonts.inter(fontWeight: FontWeight.w800, fontSize: 18, color: const Color(0xFF1C1C22))),
+                      const SizedBox(height: 8),
+                      Text('Lütfen kişisel bilgilerinizi eksiksiz doldurun.', style: GoogleFonts.inter(color: const Color(0xFF71717A), fontSize: 14)),
                       
                       const SizedBox(height: 32),
                       
                       // Input Fields
                       _buildCustomTextField(
                         label: 'Adınız',
-                        icon: Icons.badge_rounded,
+                        hint: 'Adınızı giriniz',
+                        icon: Icons.person,
                         onSaved: (val) => _firstName = val!,
                         validator: (val) => val == null || val.isEmpty ? 'Lütfen adınızı girin' : null,
                       ),
                       const SizedBox(height: 16),
                       _buildCustomTextField(
                         label: 'Soyadınız',
-                        icon: Icons.badge_rounded,
+                        hint: 'Soyadınızı giriniz',
+                        icon: Icons.person,
                         onSaved: (val) => _lastName = val!,
                         validator: (val) => val == null || val.isEmpty ? 'Lütfen soyadınızı girin' : null,
                       ),
-                      const SizedBox(height: 16),
+                      const SizedBox(height: 24),
                       
                       // Dropdown
                       Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Padding(
-                            padding: EdgeInsets.only(left: 4, bottom: 8),
-                            child: Text('Mesleğiniz', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF64748B))),
+                          Padding(
+                            padding: const EdgeInsets.only(left: 4, bottom: 8),
+                            child: Text('Mesleğiniz', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w700, color: const Color(0xFF3F3F46))),
                           ),
                           Container(
                             decoration: BoxDecoration(
                               color: Colors.white,
                               borderRadius: BorderRadius.circular(16),
-                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10, offset: const Offset(0, 4))],
-                              border: Border.all(color: const Color(0xFFF1F5F9)),
+                              border: Border.all(color: const Color(0xFFF4F4F5), width: 1.5),
+                              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 8, offset: const Offset(0, 2))],
                             ),
                             child: DropdownButtonFormField<String>(
                               value: _jobTitle,
-                              icon: const Icon(Icons.arrow_drop_down_rounded, color: Color(0xFF475569)),
+                              icon: const Icon(Icons.arrow_drop_down_rounded, color: Color(0xFF1C1C22)),
                               decoration: InputDecoration(
                                 prefixIcon: Padding(
-                                  padding: const EdgeInsets.all(8.0),
+                                  padding: const EdgeInsets.all(12.0),
                                   child: Container(
                                     padding: const EdgeInsets.all(8),
-                                    decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(10)),
-                                    child: const Icon(Icons.work_rounded, color: Color(0xFF4338CA), size: 20),
+                                    decoration: BoxDecoration(color: const Color(0xFFFFF0F1), borderRadius: BorderRadius.circular(12)),
+                                    child: const Icon(Icons.work_rounded, color: Color(0xFFE50914), size: 20),
                                   ),
                                 ),
+                                labelText: 'Liman İşçiliği',
+                                labelStyle: GoogleFonts.inter(color: const Color(0xFF71717A), fontSize: 12),
                                 border: InputBorder.none,
                                 contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                               ),
                               items: UserModel.jobRates.keys.map((String job) {
                                 return DropdownMenuItem<String>(
                                   value: job,
-                                  child: Text(job, style: const TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF1E293B))),
+                                  child: Text(job, style: GoogleFonts.inter(fontWeight: FontWeight.w700, color: const Color(0xFF1C1C22))),
                                 );
                               }).toList(),
                               onChanged: (val) => setState(() => _jobTitle = val!),
@@ -231,7 +227,38 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ],
                       ),
                       
-                      const SizedBox(height: 40),
+                      const SizedBox(height: 32),
+                      
+                      // Güvenli Kayıt Box
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFFFF6F7),
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.security_rounded, color: Color(0xFFE50914), size: 28),
+                            const SizedBox(width: 16),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text('Güvenli Kayıt', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: const Color(0xFF1C1C22))),
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    'Bilgileriniz 256-bit SSL şifreleme ile korunmakta ve sadece yetkili kişiler tarafından erişilebilir.',
+                                    style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF71717A), height: 1.4),
+                                  ),
+                                ],
+                              ),
+                            )
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(height: 32),
                       
                       // Kayıt Butonu
                       Container(
@@ -239,13 +266,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         height: 56,
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(16),
-                          gradient: const LinearGradient(
-                            colors: [Color(0xFF4338CA), Color(0xFF3B82F6)],
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                          ),
+                          color: const Color(0xFFE50914),
                           boxShadow: [
-                            BoxShadow(color: const Color(0xFF4338CA).withValues(alpha: 0.4), blurRadius: 12, offset: const Offset(0, 6)),
+                            BoxShadow(color: const Color(0xFFE50914).withValues(alpha: 0.3), blurRadius: 16, offset: const Offset(0, 8)),
                           ]
                         ),
                         child: Material(
@@ -255,16 +278,39 @@ class _RegisterScreenState extends State<RegisterScreen> {
                             onTap: _register,
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.center,
-                              children: const [
-                                Icon(Icons.save_rounded, color: Colors.white, size: 22),
-                                SizedBox(width: 12),
-                                Text('Sisteme Kaydol', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                              children: [
+                                const Icon(Icons.lock_rounded, color: Colors.white, size: 20),
+                                const SizedBox(width: 12),
+                                Text('Sisteme Kaydol', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                                const SizedBox(width: 12),
+                                const Icon(Icons.arrow_forward_rounded, color: Colors.white, size: 20),
                               ],
                             ),
                           ),
                         ),
                       ),
                       const SizedBox(height: 24),
+                      
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(Icons.lock_outline, size: 14, color: Color(0xFF71717A)),
+                          const SizedBox(width: 6),
+                          Flexible(
+                            child: RichText(
+                              textAlign: TextAlign.center,
+                              text: TextSpan(
+                                style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF71717A)),
+                                children: const [
+                                  TextSpan(text: 'Kayıt olarak, '),
+                                  TextSpan(text: 'KVKK aydınlatma metnini\n', style: TextStyle(color: Color(0xFFE50914), fontWeight: FontWeight.w600)),
+                                  TextSpan(text: 'okuduğunuzu ve kabul ettiğinizi onaylarsınız.'),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
                     ],
                   ),
                 ),
@@ -273,47 +319,40 @@ class _RegisterScreenState extends State<RegisterScreen> {
             
             // Profile Photo (Overlapping the header)
             Positioned(
-              top: 120,
+              top: 130,
               left: 0,
               right: 0,
               child: Align(
                 alignment: Alignment.center,
-                child: GestureDetector(
-                  onTap: _pickImage,
-                  child: Stack(
-                    alignment: Alignment.bottomRight,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white, // Ensure white background for border
-                        ),
-                        child: CircleAvatar(
-                          radius: 56,
-                          backgroundColor: const Color(0xFFEEF2FF),
-                          backgroundImage: _imageFile != null ? FileImage(_imageFile!) : null,
-                          child: _imageFile == null
-                              ? const Icon(Icons.person, size: 64, color: Color(0xFF94A3B8))
-                              : null,
-                        ),
+                child: Stack(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white,
+                        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 20, offset: const Offset(0, 10))],
                       ),
-                      Container(
+                      child: const CircleAvatar(
+                        radius: 60,
+                        backgroundColor: Color(0xFFF4F4F5),
+                        child: Icon(Icons.person, size: 70, color: Color(0xFFD4D4D8)),
+                      ),
+                    ),
+                    Positioned(
+                      bottom: 8,
+                      right: 8,
+                      child: Container(
                         padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
-                          color: _imageFile != null ? const Color(0xFF10B981) : const Color(0xFF4338CA),
+                          color: const Color(0xFFE50914),
                           shape: BoxShape.circle,
-                          boxShadow: [BoxShadow(color: (_imageFile != null ? const Color(0xFF10B981) : const Color(0xFF4338CA)).withValues(alpha: 0.4), blurRadius: 8, offset: const Offset(0, 4))],
-                          border: Border.all(color: Colors.white, width: 2),
+                          border: Border.all(color: Colors.white, width: 3),
                         ),
-                        child: Icon(
-                          _imageFile != null ? Icons.check_rounded : Icons.add_a_photo_rounded, 
-                          color: Colors.white, 
-                          size: 18
-                        ),
+                        child: const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 16),
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -323,28 +362,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
     );
   }
 
-  Widget _buildCustomTextField({required String label, required IconData icon, required void Function(String?) onSaved, required String? Function(String?) validator}) {
+  Widget _buildCustomTextField({required String label, required String hint, required IconData icon, required void Function(String?) onSaved, required String? Function(String?) validator}) {
     return Container(
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 10, offset: const Offset(0, 4))],
-        border: Border.all(color: const Color(0xFFF1F5F9)),
+        border: Border.all(color: const Color(0xFFF4F4F5), width: 1.5),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.02), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: TextFormField(
+        style: GoogleFonts.inter(fontWeight: FontWeight.w600, color: const Color(0xFF1C1C22)),
         decoration: InputDecoration(
           labelText: label,
-          labelStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 14),
+          labelStyle: GoogleFonts.inter(color: const Color(0xFF71717A), fontSize: 12),
+          hintText: hint,
+          hintStyle: GoogleFonts.inter(color: const Color(0xFFA1A1AA), fontSize: 14),
           prefixIcon: Padding(
-            padding: const EdgeInsets.all(8.0),
+            padding: const EdgeInsets.all(12.0),
             child: Container(
               padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(color: const Color(0xFFEEF2FF), borderRadius: BorderRadius.circular(10)),
-              child: Icon(icon, color: const Color(0xFF4338CA), size: 20),
+              decoration: BoxDecoration(color: const Color(0xFFFFF0F1), borderRadius: BorderRadius.circular(12)),
+              child: Icon(icon, color: const Color(0xFFE50914), size: 20),
             ),
           ),
           border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         ),
         validator: validator,
         onSaved: onSaved,

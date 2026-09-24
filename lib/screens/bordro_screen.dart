@@ -5,7 +5,12 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:fl_chart/fl_chart.dart';
+import 'package:animated_flip_counter/animated_flip_counter.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+import 'package:google_fonts/google_fonts.dart';
 import '../models/user_model.dart';
+import '../utils/pdf_font_helper.dart';
 
 // Geçmiş bordro verisi modeli
 class BordroData {
@@ -46,6 +51,10 @@ class BordroScreen extends StatefulWidget {
 
 class _BordroScreenState extends State<BordroScreen> {
   int _selectedIndex = 0; // 0 = Güncel ay
+  int _selectedTab = 0; // 0 = Dağılım Grafiği, 1 = Puantaj Matrisi, 2 = Detay Kalemler
+  bool _isAmountHidden = false; // Gizlilik Modu (Maaşı gizle / göster)
+  int _touchedPieIndex = -1;
+  bool _isGeneratingPdf = false;
 
   late final List<BordroData> _bordrolar;
 
@@ -60,7 +69,7 @@ class _BordroScreenState extends State<BordroScreen> {
     ];
   }
 
-  String _formatCurrency(double amount) {
+  String _formatRawCurrency(double amount) {
     bool isNegative = amount < 0;
     amount = amount.abs();
     String whole = amount.truncate().toString();
@@ -75,29 +84,28 @@ class _BordroScreenState extends State<BordroScreen> {
     return '${isNegative ? '- ' : ''}₺$formattedWhole,$fractional';
   }
 
+  String _formatCurrency(double amount) {
+    if (_isAmountHidden) {
+      return '₺ ••••••';
+    }
+    return _formatRawCurrency(amount);
+  }
+
   Future<void> _generateAndSharePDF(BordroData bordro, double brut, double mesai, double kesinti, double net) async {
-    final pdf = pw.Document();
+    if (_isGeneratingPdf) return;
+    setState(() => _isGeneratingPdf = true);
+
+    final pdfTheme = await PdfFontHelper.getTheme();
+    final pdf = pw.Document(theme: pdfTheme);
     final dateFormat = DateFormat('dd/MM/yyyy HH:mm');
     final dateStr = dateFormat.format(DateTime.now());
 
     String formatCurrencyForPdf(double amount) {
-      return _formatCurrency(amount).replaceAll('₺', 'TL');
+      return _formatRawCurrency(amount).replaceAll('₺', 'TL');
     }
 
     String normalizeTr(String text) {
-      return text
-          .replaceAll('ı', 'i')
-          .replaceAll('İ', 'I')
-          .replaceAll('ğ', 'g')
-          .replaceAll('Ğ', 'G')
-          .replaceAll('ü', 'u')
-          .replaceAll('Ü', 'U')
-          .replaceAll('ş', 's')
-          .replaceAll('Ş', 'S')
-          .replaceAll('ö', 'o')
-          .replaceAll('Ö', 'O')
-          .replaceAll('ç', 'c')
-          .replaceAll('Ç', 'C');
+      return PdfFontHelper.sanitize(text);
     }
 
     final logoI = '''<svg viewBox="0 0 24 24" width="32" height="32"><path d="M8 2h8v4H8V2zm2 6h4v14h-4V8z" fill="#0B2B6D"/></svg>''';
@@ -457,9 +465,18 @@ class _BordroScreenState extends State<BordroScreen> {
       final file = File('${dir.path}/Maas_Dekontu_${bordro.ay}_${bordro.yil}.pdf');
       await file.writeAsBytes(await pdf.save());
       
-      await Share.shareXFiles([XFile(file.path)], text: '${bordro.ay} ${bordro.yil} Maaş Dekontu');
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          text: '${bordro.ay} ${bordro.yil} Maaş Dekontu',
+        ),
+      );
     } catch (e) {
       debugPrint('PDF Hatasi: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _isGeneratingPdf = false);
+      }
     }
   }
 
@@ -477,74 +494,135 @@ class _BordroScreenState extends State<BordroScreen> {
     final double netMaas = brutMaas + toplamMesaiKazanci - ucretsizIzinKesintisi;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFF4F6F8), // Açık gri arkaplan
+      backgroundColor: const Color(0xFFF8FAFC),
       body: Stack(
         children: [
-          // Kırmızı Header Arkaplanı
+          // ── Koyu İsdemir Kurumsal Başlık Arkaplanı (Header Gradient) ──
           Positioned(
             top: 0,
             left: 0,
             right: 0,
-            height: 220,
+            height: 290,
             child: Container(
               decoration: const BoxDecoration(
-                color: Color(0xFF4338CA), // Koyu İsdemir kırmızısı
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [
+                    Color(0xFF0F172A), // Slate-900 Koyu Çelik
+                    Color(0xFF1E293B), // Slate-800
+                    Color(0xFF881337), // Rose-900 / Derin İsdemir Bordosu
+                  ],
+                ),
                 borderRadius: BorderRadius.only(
-                  bottomLeft: Radius.circular(24),
-                  bottomRight: Radius.circular(24),
+                  bottomLeft: Radius.circular(32),
+                  bottomRight: Radius.circular(32),
                 ),
               ),
             ),
           ),
-          
+
           SafeArea(
             child: Column(
               children: [
-                // Özel AppBar
+                // ── Özel AppBar (Geri, Başlık, Gizlilik Gözü, PDF Paylaş) ──
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                   child: Row(
                     children: [
-                      IconButton(
-                        onPressed: () => Navigator.pop(context),
-                        icon: const Icon(Icons.arrow_back, color: Colors.white),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+                        ),
+                        child: IconButton(
+                          onPressed: () => Navigator.pop(context),
+                          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
+                        ),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 14),
                       Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
-                          children: const [
+                          children: [
                             Text(
-                              'Maaş Bordrosu',
-                              style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold),
+                              'Maaş Bordrosu & Puantaj',
+                              style: GoogleFonts.inter(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -0.3,
+                              ),
                             ),
-                            SizedBox(height: 2),
+                            const SizedBox(height: 2),
                             Text(
-                              'Kazancınızı detaylı olarak görüntüleyin.',
-                              style: TextStyle(color: Colors.white70, fontSize: 12),
+                              'İSDEMİR A.Ş. • Personel Portalı',
+                              style: GoogleFonts.inter(
+                                color: const Color(0xFF94A3B8),
+                                fontSize: 11,
+                                fontWeight: FontWeight.w500,
+                              ),
                             ),
                           ],
                         ),
                       ),
+                      // Gizlilik Modu (Göz Butonu)
                       Container(
                         decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.15),
+                          color: Colors.white.withValues(alpha: 0.12),
                           borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
                         ),
                         child: IconButton(
-                          icon: const Icon(Icons.receipt_long_rounded, color: Colors.white),
-                          onPressed: () {},
+                          icon: Icon(
+                            _isAmountHidden ? Icons.visibility_off_rounded : Icons.visibility_rounded,
+                            color: Colors.white,
+                            size: 20,
+                          ),
+                          tooltip: _isAmountHidden ? 'Maaşı Göster' : 'Maaşı Gizle',
+                          onPressed: () {
+                            setState(() => _isAmountHidden = !_isAmountHidden);
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Hızlı PDF Paylaşım Butonu
+                      Container(
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFDC2626).withValues(alpha: 0.9),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: const Color(0xFFDC2626).withValues(alpha: 0.4),
+                              blurRadius: 8,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: IconButton(
+                          icon: _isGeneratingPdf
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                                )
+                              : const Icon(Icons.share_rounded, color: Colors.white, size: 20),
+                          tooltip: 'Dekontu Paylaş',
+                          onPressed: _isGeneratingPdf
+                              ? null
+                              : () => _generateAndSharePDF(bordro, brutMaas, toplamMesaiKazanci, ucretsizIzinKesintisi, netMaas),
                         ),
                       ),
                     ],
                   ),
                 ),
-                
-                const SizedBox(height: 16),
-                
-                // Ay Seçici (Horizontal Scroll)
+
+                const SizedBox(height: 10),
+
+                // ── Ay Seçici (Horizontal Pill List) ──
                 SizedBox(
-                  height: 40,
+                  height: 42,
                   child: ListView.builder(
                     scrollDirection: Axis.horizontal,
                     padding: const EdgeInsets.symmetric(horizontal: 16),
@@ -552,39 +630,71 @@ class _BordroScreenState extends State<BordroScreen> {
                     itemBuilder: (context, index) {
                       final b = _bordrolar[index];
                       final isSelected = _selectedIndex == index;
+                      final isCurrent = index == 0;
+
                       return Padding(
                         padding: const EdgeInsets.only(right: 8.0),
                         child: GestureDetector(
                           onTap: () => setState(() => _selectedIndex = index),
                           child: AnimatedContainer(
-                            duration: const Duration(milliseconds: 200),
-                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 0),
+                            duration: const Duration(milliseconds: 250),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 0),
                             alignment: Alignment.center,
                             decoration: BoxDecoration(
-                              color: Colors.white,
-                              borderRadius: BorderRadius.circular(20),
+                              gradient: isSelected
+                                  ? const LinearGradient(
+                                      colors: [Color(0xFFDC2626), Color(0xFF991B1B)],
+                                    )
+                                  : null,
+                              color: isSelected ? null : Colors.white.withValues(alpha: 0.1),
+                              borderRadius: BorderRadius.circular(24),
                               border: Border.all(
-                                color: isSelected ? const Color(0xFF4338CA) : Colors.grey.shade300,
-                                width: isSelected ? 1.5 : 1.0,
+                                color: isSelected ? const Color(0xFFFF8A80) : Colors.white.withValues(alpha: 0.18),
+                                width: 1.2,
                               ),
                               boxShadow: isSelected
-                                  ? [BoxShadow(color: const Color(0xFF4338CA).withValues(alpha: 0.2), blurRadius: 8, offset: const Offset(0, 3))]
+                                  ? [
+                                      BoxShadow(
+                                        color: const Color(0xFFDC2626).withValues(alpha: 0.45),
+                                        blurRadius: 10,
+                                        offset: const Offset(0, 3),
+                                      ),
+                                    ]
                                   : [],
                             ),
                             child: Row(
                               children: [
                                 if (isSelected) ...[
-                                  const Icon(Icons.calendar_month_rounded, color: Color(0xFF4338CA), size: 16),
+                                  const Icon(Icons.event_available_rounded, color: Colors.white, size: 15),
                                   const SizedBox(width: 6),
                                 ],
                                 Text(
                                   '${b.ay} ${b.yil}',
-                                  style: TextStyle(
-                                    color: isSelected ? const Color(0xFF4338CA) : Colors.grey.shade600,
-                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                    fontSize: 13,
+                                  style: GoogleFonts.inter(
+                                    color: isSelected ? Colors.white : Colors.white70,
+                                    fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
+                                    fontSize: 12.5,
                                   ),
                                 ),
+                                if (isCurrent) ...[
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                                    decoration: BoxDecoration(
+                                      color: isSelected ? Colors.white.withValues(alpha: 0.25) : const Color(0xFF10B981),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      'GÜNCEL',
+                                      style: GoogleFonts.inter(
+                                        color: Colors.white,
+                                        fontSize: 9,
+                                        fontWeight: FontWeight.w900,
+                                        letterSpacing: 0.5,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ],
                             ),
                           ),
@@ -594,136 +704,39 @@ class _BordroScreenState extends State<BordroScreen> {
                   ),
                 ),
 
-                const SizedBox(height: 16),
+                const SizedBox(height: 12),
 
-                // Scrollable Content
+                // ── Kaydırılabilir Gövde ──
                 Expanded(
                   child: SingleChildScrollView(
-                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
                     child: Column(
                       children: [
-                        // KART 1: Personel ve Şirket Bilgileri
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(20),
-                            boxShadow: [
-                              BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4)),
-                            ],
-                          ),
-                          padding: const EdgeInsets.all(20),
-                          child: Column(
-                            children: [
-                              // Şirket Başlığı
-                              Row(
-                                children: [
-                                  Container(
-                                    width: 48,
-                                    height: 48,
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF4338CA),
-                                      borderRadius: BorderRadius.circular(12),
-                                    ),
-                                    child: const Icon(Icons.domain_rounded, color: Colors.white, size: 28),
-                                  ),
-                                  const SizedBox(width: 12),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        const Text(
-                                          'İSDEMİR A.Ş.',
-                                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: Color(0xFF1A202C)),
-                                        ),
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          'PERSONEL MAAŞ BORDROSU',
-                                          style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.grey.shade500),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF4338CA).withValues(alpha: 0.1),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      '${bordro.ay.toUpperCase()} ${bordro.yil}',
-                                      style: const TextStyle(color: Color(0xFF4338CA), fontWeight: FontWeight.bold, fontSize: 10),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              
-                              const SizedBox(height: 20),
-                              
-                              // Personel Bilgileri Listesi
-                              _buildPersonelRow(Icons.person_outline, 'Ad Soyad', '${widget.user.firstName} ${widget.user.lastName}'),
-                              _buildDottedDivider(),
-                              _buildPersonelRow(Icons.admin_panel_settings_outlined, 'Ünvan', widget.user.jobTitle),
-                              _buildDottedDivider(),
-                              _buildPersonelRow(Icons.badge_outlined, 'Sicil No', 'ISD-947210'),
-                              _buildDottedDivider(),
-                              _buildPersonelRow(Icons.calendar_today_outlined, 'Çalışma Gün', '${bordro.calismaGun}'),
-                            ],
-                          ),
-                        ),
+                        // ── KART 1: Hologram VIP Bordro Kartı (Credit Card Style) ──
+                        _buildVipBordroCard(bordro, netMaas, brutMaas, toplamMesaiKazanci, ucretsizIzinKesintisi),
 
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
 
-                        // KART 2: Taban Maaş
-                        _buildDetailCard(
-                          icon: Icons.account_balance_wallet_rounded,
-                          iconColor: const Color(0xFF475569),
-                          title: 'TABAN MAAŞ',
-                          subtitle: 'Brüt Taban Maaş',
-                          amount: brutMaas,
-                          trailingIcon: Icons.keyboard_arrow_down_rounded,
-                        ),
+                        // ── Segment Tab Seçici (Grafik, Puantaj, Detaylar) ──
+                        _buildSegmentTabBar(),
 
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 16),
 
-                        // KART 3: Mesai Kazançları
-                        _buildDetailCard(
-                          icon: Icons.access_time_filled_rounded,
-                          iconColor: const Color(0xFF2563EB),
-                          title: 'MESAİ KAZANÇLARI',
-                          subtitle: toplamMesaiKazanci > 0 ? 'Bu ay toplam mesai kazancı' : 'Bu ay mesai yapılmamıştır.',
-                          amount: toplamMesaiKazanci > 0 ? toplamMesaiKazanci : null,
-                          trailingIcon: toplamMesaiKazanci > 0 ? Icons.keyboard_arrow_down_rounded : Icons.chevron_right_rounded,
-                        ),
+                        // ── Seçili Tab İçeriği ──
+                        if (_selectedTab == 0)
+                          _buildChartTab(bordro, brutMaas, normalMesaiKazanci, bayramMesaiKazanci, ucretsizIzinKesintisi, netMaas)
+                        else if (_selectedTab == 1)
+                          _buildPuantajTab(bordro, job, normalMesaiKazanci, bayramMesaiKazanci, ucretsizIzinKesintisi)
+                        else
+                          _buildDetailsTab(bordro, job, brutMaas, normalMesaiKazanci, bayramMesaiKazanci, ucretsizIzinKesintisi, netMaas),
 
-                        const SizedBox(height: 12),
+                        const SizedBox(height: 20),
 
-                        // KART 4: İzin Durumu
-                        _buildDetailCard(
-                          icon: Icons.event_busy_rounded,
-                          iconColor: const Color(0xFF9333EA),
-                          title: 'İZİN DURUMU',
-                          subtitle: bordro.ucretsizIzinGun > 0 ? 'Kullanılan ücretsiz izin' : 'Bu ay ücretsiz izin kullanılmamıştır.',
-                          amount: bordro.ucretsizIzinGun > 0 ? -ucretsizIzinKesintisi : null,
-                          trailingIcon: bordro.ucretsizIzinGun > 0 ? Icons.keyboard_arrow_down_rounded : Icons.chevron_right_rounded,
-                        ),
+                        // ── PDF İndir ve Paylaş Butonu ──
+                        _buildPdfActionCard(bordro, brutMaas, toplamMesaiKazanci, ucretsizIzinKesintisi, netMaas),
 
-                        // PDF Olarak İndir Butonu
-                        SizedBox(
-                          width: double.infinity,
-                          child: ElevatedButton.icon(
-                            onPressed: () => _generateAndSharePDF(bordro, brutMaas, toplamMesaiKazanci, ucretsizIzinKesintisi, netMaas),
-                            icon: const Icon(Icons.picture_as_pdf_rounded, color: Colors.white, size: 20),
-                            label: const Text('MAAŞ DEKONTUNU İNDİR', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: const Color(0xFF4338CA),
-                              padding: const EdgeInsets.symmetric(vertical: 18),
-                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                              elevation: 4,
-                            ),
-                          ),
-                        ),
-                        
-                        const SizedBox(height: 40),
+                        const SizedBox(height: 32),
                       ],
                     ),
                   ),
@@ -736,118 +749,889 @@ class _BordroScreenState extends State<BordroScreen> {
     );
   }
 
-  Widget _buildPersonelRow(IconData icon, String label, String value) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Row(
-        children: [
-          Container(
-            padding: const EdgeInsets.all(8),
-            decoration: BoxDecoration(
-              color: const Color(0xFF4338CA).withValues(alpha: 0.08),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Icon(icon, color: const Color(0xFF4338CA), size: 18),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            flex: 2,
-            child: Text(label, style: const TextStyle(color: Color(0xFF64748B), fontSize: 13)),
-          ),
-          Expanded(
-            flex: 3,
-            child: Text(value, style: const TextStyle(color: Color(0xFF1E293B), fontSize: 13, fontWeight: FontWeight.w600)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDottedDivider() {
-    return Padding(
-      padding: const EdgeInsets.only(left: 54.0),
-      child: CustomPaint(
-        size: const Size(double.infinity, 1),
-        painter: DottedLinePainter(),
-      ),
-    );
-  }
-
-  Widget _buildDetailCard({
-    required IconData icon,
-    required Color iconColor,
-    required String title,
-    required String subtitle,
-    double? amount,
-    required IconData trailingIcon,
-  }) {
+  // ── 💳 Hologram Bordro Kredi Kartı ──
+  Widget _buildVipBordroCard(BordroData bordro, double netMaas, double brutMaas, double mesaiKazanci, double kesinti) {
     return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF1E293B), // Slate-800
+            Color(0xFF0F172A), // Slate-900
+            Color(0xFF5A0C16), // Dark Crimson İsdemir
+          ],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.15), width: 1.2),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 8, offset: const Offset(0, 2)),
+          BoxShadow(
+            color: const Color(0xFF0F172A).withValues(alpha: 0.35),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
         ],
       ),
-      padding: const EdgeInsets.all(16),
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: iconColor,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Icon(icon, color: Colors.white, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  style: TextStyle(color: iconColor, fontSize: 13, fontWeight: FontWeight.bold, letterSpacing: 0.3),
+          // Üst Satır: Şirket Logosu & Dönem
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 32,
+                    height: 32,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFDC2626),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFDC2626).withValues(alpha: 0.5),
+                          blurRadius: 8,
+                        ),
+                      ],
+                    ),
+                    child: const Center(
+                      child: Icon(Icons.factory_rounded, color: Colors.white, size: 18),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'İSDEMİR A.Ş.',
+                        style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      Text(
+                        'RESMİ MAAŞ BORDROSU',
+                        style: GoogleFonts.inter(
+                          color: const Color(0xFF94A3B8),
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
                 ),
-                const SizedBox(height: 2),
+                child: Text(
+                  '${bordro.ay.toUpperCase()} ${bordro.yil}',
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 22),
+
+          // Orta Alan: Net Tutar Başlığı
+          Text(
+            'HESABA YATIRILACAK NET TUTAR',
+            style: GoogleFonts.inter(
+              color: const Color(0xFFCBD5E1),
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 4),
+
+          // Net Tutar (AnimatedFlipCounter & Gizlilik Desteği)
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text(
+                '₺ ',
+                style: GoogleFonts.inter(
+                  color: const Color(0xFFE2E8F0),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              if (_isAmountHidden)
                 Text(
-                  subtitle,
-                  style: const TextStyle(color: Color(0xFF64748B), fontSize: 11),
+                  '• • • • • •',
+                  style: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 3.0,
+                  ),
+                )
+              else
+                AnimatedFlipCounter(
+                  value: netMaas,
+                  fractionDigits: 2,
+                  thousandSeparator: '.',
+                  decimalSeparator: ',',
+                  duration: const Duration(milliseconds: 750),
+                  curve: Curves.easeOutCubic,
+                  textStyle: GoogleFonts.inter(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+              const Spacer(),
+              if (mesaiKazanci > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.arrow_upward_rounded, color: Color(0xFF10B981), size: 12),
+                      const SizedBox(width: 2),
+                      Text(
+                        _isAmountHidden ? 'Mesai Ekli' : '+${_formatRawCurrency(mesaiKazanci)}',
+                        style: GoogleFonts.inter(
+                          color: const Color(0xFF10B981),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+
+          const SizedBox(height: 20),
+
+          // Alt Satır: Personel Adı, Görevi ve Onay Rozeti
+          Container(
+            padding: const EdgeInsets.only(top: 14),
+            decoration: BoxDecoration(
+              border: Border(top: BorderSide(color: Colors.white.withValues(alpha: 0.12), width: 1)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 16,
+                      backgroundColor: const Color(0xFFDC2626),
+                      child: Text(
+                        (widget.user.firstName.isNotEmpty ? widget.user.firstName[0] : 'İ') +
+                            (widget.user.lastName.isNotEmpty ? widget.user.lastName[0] : 'S'),
+                        style: GoogleFonts.inter(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${widget.user.firstName} ${widget.user.lastName}',
+                          style: GoogleFonts.inter(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        Text(
+                          widget.user.jobTitle,
+                          style: GoogleFonts.inter(
+                            color: const Color(0xFF94A3B8),
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.check_circle_rounded, color: Color(0xFF10B981), size: 14),
+                      const SizedBox(width: 4),
+                      Text(
+                        'Ödendi',
+                        style: GoogleFonts.inter(
+                          color: const Color(0xFF10B981),
+                          fontSize: 11,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ],
             ),
           ),
-          if (amount != null) ...[
-            Text(
-              _formatCurrency(amount),
-              style: const TextStyle(color: Color(0xFF1E293B), fontSize: 16, fontWeight: FontWeight.bold),
+        ],
+      ),
+    ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.08, end: 0);
+  }
+
+  // ── 🎛️ Segment Tab Bar ──
+  Widget _buildSegmentTabBar() {
+    final tabs = [
+      {'icon': Icons.pie_chart_rounded, 'title': 'Dağılım'},
+      {'icon': Icons.calendar_today_rounded, 'title': 'Puantaj'},
+      {'icon': Icons.receipt_long_rounded, 'title': 'Kalemler'},
+    ];
+
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.03),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      child: Row(
+        children: List.generate(tabs.length, (index) {
+          final isSelected = _selectedTab == index;
+          return Expanded(
+            child: GestureDetector(
+              onTap: () => setState(() => _selectedTab = index),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  color: isSelected ? const Color(0xFF0F172A) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      tabs[index]['icon'] as IconData,
+                      color: isSelected ? Colors.white : const Color(0xFF64748B),
+                      size: 16,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      tabs[index]['title'] as String,
+                      style: GoogleFonts.inter(
+                        color: isSelected ? Colors.white : const Color(0xFF64748B),
+                        fontSize: 12.5,
+                        fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
             ),
-            const SizedBox(width: 12),
-          ],
-          Icon(trailingIcon, color: const Color(0xFF94A3B8), size: 20),
+          );
+        }),
+      ),
+    );
+  }
+
+  // ── 📊 TAB 1: fl_chart İnteraktif Pasta / Donut Grafiği ──
+  Widget _buildChartTab(BordroData bordro, double brutMaas, double normalMesai, double bayramMesai, double kesinti, double netMaas) {
+    final double toplamKazanc = brutMaas + normalMesai + bayramMesai;
+    final double mesaiOrani = toplamKazanc > 0 ? ((normalMesai + bayramMesai) / toplamKazanc * 100) : 0.0;
+
+    List<PieChartSectionData> sections = [];
+    if (brutMaas > 0) {
+      final isTouched = _touchedPieIndex == 0;
+      sections.add(PieChartSectionData(
+        color: const Color(0xFF3B82F6), // Taban Maaş Mavi
+        value: brutMaas,
+        title: isTouched ? '₺${(brutMaas / 1000).toStringAsFixed(1)}k' : '%${(brutMaas / toplamKazanc * 100).round()}',
+        radius: isTouched ? 44.0 : 36.0,
+        titleStyle: GoogleFonts.inter(fontSize: isTouched ? 12 : 11, fontWeight: FontWeight.w800, color: Colors.white),
+      ));
+    }
+    if (normalMesai > 0) {
+      final isTouched = _touchedPieIndex == 1;
+      sections.add(PieChartSectionData(
+        color: const Color(0xFF10B981), // Normal Mesai Yeşil
+        value: normalMesai,
+        title: isTouched ? '₺${(normalMesai / 1000).toStringAsFixed(1)}k' : '%${(normalMesai / toplamKazanc * 100).round()}',
+        radius: isTouched ? 44.0 : 36.0,
+        titleStyle: GoogleFonts.inter(fontSize: isTouched ? 12 : 11, fontWeight: FontWeight.w800, color: Colors.white),
+      ));
+    }
+    if (bayramMesai > 0) {
+      final isTouched = _touchedPieIndex == 2;
+      sections.add(PieChartSectionData(
+        color: const Color(0xFFF59E0B), // Bayram Mesai Amber
+        value: bayramMesai,
+        title: isTouched ? '₺${(bayramMesai / 1000).toStringAsFixed(1)}k' : '%${(bayramMesai / toplamKazanc * 100).round()}',
+        radius: isTouched ? 44.0 : 36.0,
+        titleStyle: GoogleFonts.inter(fontSize: isTouched ? 12 : 11, fontWeight: FontWeight.w800, color: Colors.white),
+      ));
+    }
+    if (kesinti > 0) {
+      final isTouched = _touchedPieIndex == 3;
+      sections.add(PieChartSectionData(
+        color: const Color(0xFFEF4444), // Kesinti Kırmızı
+        value: kesinti,
+        title: isTouched ? '-₺${(kesinti / 1000).toStringAsFixed(1)}k' : 'Kesinti',
+        radius: isTouched ? 44.0 : 36.0,
+        titleStyle: GoogleFonts.inter(fontSize: isTouched ? 12 : 11, fontWeight: FontWeight.w800, color: Colors.white),
+      ));
+    }
+
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Gelir ve Kazanç Dağılımı',
+                style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w800, color: const Color(0xFF1E293B)),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF1F5F9),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'fl_chart Analiz',
+                  style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF64748B)),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 20),
+
+          // Donut Grafik
+          SizedBox(
+            height: 190,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                PieChart(
+                  PieChartData(
+                    pieTouchData: PieTouchData(
+                      touchCallback: (FlTouchEvent event, pieTouchResponse) {
+                        setState(() {
+                          if (!event.isInterestedForInteractions ||
+                              pieTouchResponse == null ||
+                              pieTouchResponse.touchedSection == null) {
+                            _touchedPieIndex = -1;
+                            return;
+                          }
+                          _touchedPieIndex = pieTouchResponse.touchedSection!.touchedSectionIndex;
+                        });
+                      },
+                    ),
+                    borderData: FlBorderData(show: false),
+                    sectionsSpace: 3,
+                    centerSpaceRadius: 46,
+                    sections: sections,
+                  ),
+                ),
+                // Donut Ortasındaki Net Tutar Metni
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'TOPLAM NET',
+                      style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 9, fontWeight: FontWeight.w800, letterSpacing: 1.0),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      _isAmountHidden ? '••••••' : _formatRawCurrency(netMaas),
+                      style: GoogleFonts.inter(color: const Color(0xFF0F172A), fontSize: 13, fontWeight: FontWeight.w900),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          // Açıklama Göstergeleri (Legend)
+          _buildLegendRow(const Color(0xFF3B82F6), 'Taban Maaş', brutMaas, toplamKazanc),
+          _buildLegendRow(const Color(0xFF10B981), 'Normal Mesai Kazancı', normalMesai, toplamKazanc),
+          _buildLegendRow(const Color(0xFFF59E0B), 'Bayram / Tatil Mesaisi', bayramMesai, toplamKazanc),
+          if (kesinti > 0)
+            _buildLegendRow(const Color(0xFFEF4444), 'Ücretsiz İzin Kesintisi', -kesinti, toplamKazanc),
+
+          const SizedBox(height: 16),
+
+          // Öngörü ve Mesai Katkı Rozeti
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8FAFC),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: const Color(0xFFE2E8F0)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: const Icon(Icons.insights_rounded, color: Color(0xFF10B981), size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    mesaiOrani > 0
+                        ? 'Bu ay toplam gelirinizin %${mesaiOrani.toStringAsFixed(1)} kadarı fazla mesai çalışmalarınızdan oluştu.'
+                        : 'Bu ay yalnızca standart çalışma yapılmış, ek mesai bulunmamaktadır.',
+                    style: GoogleFonts.inter(color: const Color(0xFF475569), fontSize: 12, fontWeight: FontWeight.w500, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 350.ms);
+  }
+
+  Widget _buildLegendRow(Color color, String label, double amount, double total) {
+    if (amount.abs() == 0) return const SizedBox.shrink();
+    final pct = total > 0 ? (amount.abs() / total * 100).toStringAsFixed(1) : '0';
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6.0),
+      child: Row(
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              label,
+              style: GoogleFonts.inter(color: const Color(0xFF334155), fontSize: 12.5, fontWeight: FontWeight.w600),
+            ),
+          ),
+          Text(
+            '%$pct  ',
+            style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 11.5, fontWeight: FontWeight.w600),
+          ),
+          Text(
+            _formatCurrency(amount),
+            style: GoogleFonts.inter(
+              color: amount < 0 ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
+              fontSize: 12.5,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
         ],
       ),
     );
   }
-}
 
-class DottedLinePainter extends CustomPainter {
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = Colors.grey.shade300
-      ..strokeWidth = 1
-      ..style = PaintingStyle.stroke;
-      
-    const double dashWidth = 4, dashSpace = 4;
-    double startX = 0;
-    while (startX < size.width) {
-      canvas.drawLine(Offset(startX, 0), Offset(startX + dashWidth, 0), paint);
-      startX += dashWidth + dashSpace;
-    }
+  // ── 📅 TAB 2: Aylık Puantaj Matrisi (Vardiya & Gün Kırılımı) ──
+  Widget _buildPuantajTab(BordroData bordro, JobDetails job, double normalMesai, double bayramMesai, double kesinti) {
+    return Column(
+      children: [
+        // 2x2 Puantaj İstatistik Grid Kartları
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                icon: Icons.work_outline_rounded,
+                iconColor: const Color(0xFF3B82F6),
+                title: 'Normal Çalışma',
+                value: '${bordro.calismaGun} Gün',
+                subtitle: 'Standart vardiya',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildMetricCard(
+                icon: Icons.access_time_filled_rounded,
+                iconColor: const Color(0xFF10B981),
+                title: 'Normal Mesai',
+                value: '${bordro.normalMesaiGun} Gün',
+                subtitle: 'Birim: ${_formatRawCurrency(job.normalMesaiRate)}',
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: _buildMetricCard(
+                icon: Icons.celebration_rounded,
+                iconColor: const Color(0xFFF59E0B),
+                title: 'Bayram Mesaisi',
+                value: '${bordro.bayramMesaiGun} Gün',
+                subtitle: 'Birim: ${_formatRawCurrency(job.bayramMesaiRate)}',
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildMetricCard(
+                icon: Icons.event_busy_rounded,
+                iconColor: const Color(0xFFEF4444),
+                title: 'Ücretsiz İzin',
+                value: '${bordro.ucretsizIzinGun} Gün',
+                subtitle: bordro.ucretsizIzinGun > 0 ? 'Kesinti: ${_formatRawCurrency(kesinti)}' : 'Eksik gün yok',
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 16),
+
+        // Saha Doğrulama ve PDKS Bilgi Paneli
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4)),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0F172A).withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.fingerprint_rounded, color: Color(0xFF0F172A), size: 22),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'İSDEMİR PDKS Saha Doğrulaması',
+                          style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w800, color: const Color(0xFF0F172A)),
+                        ),
+                        Text(
+                          'Turnike ve kartlı geçiş verileriyle tam eşleşti.',
+                          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.verified_rounded, color: Color(0xFF10B981), size: 22),
+                ],
+              ),
+              const SizedBox(height: 14),
+              const Divider(height: 1, color: Color(0xFFE2E8F0)),
+              const SizedBox(height: 14),
+              _buildPuantajDetailRow('Puantaj Dönemi', '${bordro.ay} ${bordro.yil} (1 - 30 ${bordro.ay})'),
+              _buildPuantajDetailRow('Sicil No / Personel', 'ISD-947210 / ${widget.user.firstName} ${widget.user.lastName}'),
+              _buildPuantajDetailRow('Çalışma Departmanı', widget.user.jobTitle),
+              _buildPuantajDetailRow('Toplam Mesai Saati Karşılığı', '${(bordro.normalMesaiGun + bordro.bayramMesaiGun) * 8} Saat'),
+            ],
+          ),
+        ),
+      ],
+    ).animate().fadeIn(duration: 350.ms);
   }
 
-  @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  Widget _buildMetricCard({required IconData icon, required Color iconColor, required String title, required String value, required String subtitle}) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: iconColor.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: iconColor, size: 20),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            title,
+            style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 11.5, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            value,
+            style: GoogleFonts.inter(color: const Color(0xFF0F172A), fontSize: 18, fontWeight: FontWeight.w900),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 10.5, fontWeight: FontWeight.w500),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPuantajDetailRow(String title, String val) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(title, style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 12)),
+          Text(val, style: GoogleFonts.inter(color: const Color(0xFF1E293B), fontSize: 12, fontWeight: FontWeight.w700)),
+        ],
+      ),
+    );
+  }
+
+  // ── 📋 TAB 3: Kalemler ve Detaylı Finansal Bordro Tablosu ──
+  Widget _buildDetailsTab(BordroData bordro, JobDetails job, double brutMaas, double normalMesai, double bayramMesai, double kesinti, double netMaas) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.03), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Resmi Bordro Kalemleri',
+            style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w800, color: const Color(0xFF1E293B)),
+          ),
+          const SizedBox(height: 16),
+
+          // Kazançlar Başlığı
+          _buildCategoryHeader('HAKEDİŞ VE GELİRLER', const Color(0xFF10B981)),
+          _buildItemRow('Brüt Taban Maaş', _formatCurrency(brutMaas), 'Aylık sözleşme tutarı'),
+          _buildItemRow('Normal Mesai (${bordro.normalMesaiGun} Gün)', _formatCurrency(normalMesai), '${_formatRawCurrency(job.normalMesaiRate)} / gün x 1.5 katsayı'),
+          _buildItemRow('Bayram / Resmi Tatil (${bordro.bayramMesaiGun} Gün)', _formatCurrency(bayramMesai), '${_formatRawCurrency(job.bayramMesaiRate)} / gün x 2.0 katsayı'),
+
+          const SizedBox(height: 16),
+
+          // Kesintiler Başlığı
+          _buildCategoryHeader('YASAL VE ŞİRKET KESİNTİLERİ', const Color(0xFFEF4444)),
+          _buildItemRow(
+            'Ücretsiz İzin Kesintisi (${bordro.ucretsizIzinGun} Gün)',
+            kesinti > 0 ? '- ${_formatCurrency(kesinti)}' : '₺0,00',
+            bordro.ucretsizIzinGun > 0 ? 'Dilekçeli devamsızlık kesintisi' : 'Kesinti bulunmuyor',
+            isDeduction: kesinti > 0,
+          ),
+          _buildItemRow(
+            'Gelir ve Damga Vergisi',
+            'Muaf (₺0,00)',
+            'Asgari ücret muafiyeti uygulanmıştır',
+          ),
+
+          const SizedBox(height: 16),
+          const Divider(height: 1, color: Color(0xFFE2E8F0)),
+          const SizedBox(height: 16),
+
+          // Net Özet
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'NET ÖDENEN TUTAR',
+                    style: GoogleFonts.inter(color: const Color(0xFF0F172A), fontSize: 13, fontWeight: FontWeight.w900),
+                  ),
+                  Text(
+                    'Banka hesabına aktarılan',
+                    style: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 11),
+                  ),
+                ],
+              ),
+              Text(
+                _formatCurrency(netMaas),
+                style: GoogleFonts.inter(color: const Color(0xFF0F172A), fontSize: 18, fontWeight: FontWeight.w900),
+              ),
+            ],
+          ),
+        ],
+      ),
+    ).animate().fadeIn(duration: 350.ms);
+  }
+
+  Widget _buildCategoryHeader(String title, Color color) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0, top: 4.0),
+      child: Row(
+        children: [
+          Container(width: 4, height: 14, decoration: BoxDecoration(color: color, borderRadius: BorderRadius.circular(2))),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: GoogleFonts.inter(color: color, fontSize: 11, fontWeight: FontWeight.w800, letterSpacing: 0.8),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildItemRow(String title, String amount, String note, {bool isDeduction = false}) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: GoogleFonts.inter(color: const Color(0xFF1E293B), fontSize: 13, fontWeight: FontWeight.w600)),
+                Text(note, style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 11)),
+              ],
+            ),
+          ),
+          Text(
+            amount,
+            style: GoogleFonts.inter(
+              color: isDeduction ? const Color(0xFFEF4444) : const Color(0xFF0F172A),
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 📄 PDF İndir & Paylaş Buton Kartı ──
+  Widget _buildPdfActionCard(BordroData bordro, double brut, double mesai, double kesinti, double net) {
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [Color(0xFF0F172A), Color(0xFF1E293B)],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: _isGeneratingPdf ? null : () => _generateAndSharePDF(bordro, brut, mesai, kesinti, net),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 48,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFDC2626),
+                    borderRadius: BorderRadius.circular(14),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFDC2626).withValues(alpha: 0.5),
+                        blurRadius: 10,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: _isGeneratingPdf
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2.5),
+                          )
+                        : const Icon(Icons.picture_as_pdf_rounded, color: Colors.white, size: 24),
+                  ),
+                ),
+                const SizedBox(width: 16),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'MAAŞ DEKONTUNU İNDİR & PAYLAŞ',
+                        style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Resmi antetli, dijital imzalı A4 PDF formatı',
+                        style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w500),
+                      ),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white70, size: 16),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
