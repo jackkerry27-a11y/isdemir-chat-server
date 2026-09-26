@@ -93,11 +93,11 @@ async function sendOneSignalNotification(title, message, data = {}) {
 }
 
 // Zorunlu Güncelleme API & Doğrudan İndirme Yönlendirmeleri
-const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v13.0/app-release.apk";
+const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v14.0/app-release.apk";
 
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 13,
+    latestVersion: 14,
     downloadUrl: LATEST_APK_URL
   });
 });
