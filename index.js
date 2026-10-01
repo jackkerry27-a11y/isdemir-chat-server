@@ -93,11 +93,11 @@ async function sendOneSignalNotification(title, message, data = {}) {
 }
 
 // Zorunlu Güncelleme API & Doğrudan İndirme Yönlendirmeleri
-const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v14.0/app-release.apk";
+const LATEST_APK_URL = "https://github.com/jackkerry27-a11y/isdemir-chat-server/releases/download/v15.0/app-release.apk";
 
 app.get('/version', (req, res) => {
   res.json({
-    latestVersion: 14,
+    latestVersion: 15,
     downloadUrl: LATEST_APK_URL
   });
 });
@@ -541,6 +541,8 @@ let lastSentWeatherAlert = {
   windTimestamp: 0,
   stormTimestamp: 0,
   dailySummaryTimestamp: 0,
+  lastGlobalTimestamp: 0,
+  lastTitle: '',
 };
 
 async function checkWeatherAndNotify() {
@@ -552,6 +554,13 @@ async function checkWeatherAndNotify() {
     const marineLon = 36.178;
     const weatherUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m,visibility&minutely_15=precipitation,precipitation_probability,weather_code&hourly=weather_code,precipitation_probability,temperature_2m&timezone=Europe%2FIstanbul`;
     const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${marineLat}&longitude=${marineLon}&current=wave_height`;
+
+    const now = Date.now();
+
+    // 🛡️ GENEL COOLDOWN KORUMASI: Son 3 saat içinde herhangi bir hava bildirimi gönderildiyse bekle
+    if (now - lastSentWeatherAlert.lastGlobalTimestamp < 3 * 60 * 60 * 1000) {
+      return;
+    }
 
     const [weatherRes, marineRes] = await Promise.all([
       fetch(weatherUrl).then(r => r.json()).catch(() => null),
@@ -565,9 +574,67 @@ async function checkWeatherAndNotify() {
     const temp = Math.round(current.temperature_2m);
     const windSpeed = Math.round(current.wind_speed_10m);
     const weatherCode = current.weather_code;
-    const now = Date.now();
 
-    // 0. GOOGLE METNET-3 DAKİKALIK NOKTA ATIŞI YAĞIŞ RADARI UYARISI
+    // 1. ÖNCELİK: GÖKGÜRÜLTÜLÜ FIRTINA & ŞİMŞEK UYARISI
+    if (weatherCode >= 95) {
+      if (now - lastSentWeatherAlert.stormTimestamp > 3 * 60 * 60 * 1000) {
+        lastSentWeatherAlert.stormTimestamp = now;
+        lastSentWeatherAlert.lastGlobalTimestamp = now;
+        lastSentWeatherAlert.lastTitle = '⚡ WeatherNext 3 • Gökgürültülü Fırtına & Şimşek';
+        const title = lastSentWeatherAlert.lastTitle;
+        const msg = `Payas ve İSDEMİR mikro-şebekesinde konvektif fırtına ve şimşek tespit edildi. Rıhtım, yüksek vinç ve metal saha personeline tedbir alınız.`;
+        console.log(`[Fırtına Bildirimi]: ${title} -> ${msg}`);
+        await sendOneSignalNotification(title, msg, {
+          type: 'weather',
+          weather_type: 'storm',
+          sound: 'thunder',
+        });
+        return;
+      }
+    }
+
+    // 2. ÖNCELİK: KRİTİK FIRTINA & ŞİDDETLİ RÜZGAR (>= 28 km/s Liman Uyarısı, >= 42 km/s Vinç Kilidi)
+    if (windSpeed >= 28) {
+      if (now - lastSentWeatherAlert.windTimestamp > 3 * 60 * 60 * 1000) {
+        lastSentWeatherAlert.windTimestamp = now;
+        lastSentWeatherAlert.lastGlobalTimestamp = now;
+        const isCritical = windSpeed >= 42;
+        lastSentWeatherAlert.lastTitle = isCritical
+          ? `💨 WeatherNext 3 • Şiddetli Fırtına Alarmı`
+          : `💨 WeatherNext 3 • Şiddetli Rüzgar Uyarısı (>28 km/s)`;
+        const title = lastSentWeatherAlert.lastTitle;
+        const msg = `Liman sahasında rüzgar hızı ${windSpeed} km/s seviyesine ulaştı. Kule vinç ve açık saha operasyonlarında tedbir alınız.`;
+        console.log(`[Rüzgar Bildirimi]: ${title} -> ${msg}`);
+        await sendOneSignalNotification(title, msg, {
+          type: 'weather',
+          weather_type: 'wind',
+          sound: 'wind',
+          windSpeed,
+        });
+        return;
+      }
+    }
+
+    // 3. ÖNCELİK: ECMWF AIFS WAVE DENİZ & DALGA UYARISI (1.0m+ Sınırı)
+    if (waveHeight >= 1.0) {
+      if (now - lastSentWeatherAlert.waveTimestamp > 4 * 60 * 60 * 1000) {
+        lastSentWeatherAlert.waveTimestamp = now;
+        lastSentWeatherAlert.lastGlobalTimestamp = now;
+        lastSentWeatherAlert.lastTitle = `🌊 AIFS Wave AI • İSDEMİR Yüksek Dalga Alarmı (>1m)`;
+        const title = lastSentWeatherAlert.lastTitle;
+        const msg = `ECMWF AIFS Wave (36.724, 36.178) analizine göre rıhtımda dalga boyu ${waveHeight.toFixed(1)}m ile 1 metre sınırını aştı! Gemi bağlama ve rıhtım operasyonlarında acil tedbir alınız.`;
+        console.log(`[Deniz Bildirimi]: ${title} -> ${msg}`);
+        await sendOneSignalNotification(title, msg, {
+          type: 'marine_wave',
+          weather_type: 'wave',
+          sound: 'sea_ambient',
+          waveHeight,
+        });
+        return;
+      }
+    }
+
+    // 4. ÖNCELİK: GOOGLE METNET-3 DAKİKALIK NOKTA ATIŞI YAĞIŞ RADARI UYARISI
     if (weatherRes.minutely_15 && weatherRes.minutely_15.time && weatherRes.minutely_15.precipitation) {
       const mTimes = weatherRes.minutely_15.time;
       const mPrecips = weatherRes.minutely_15.precipitation;
@@ -596,104 +663,19 @@ async function checkWeatherAndNotify() {
       if (metNetRainMinutes > 0 && metNetRainMinutes <= 45) {
         if (now - lastSentWeatherAlert.rainTimestamp > 3 * 60 * 60 * 1000) {
           lastSentWeatherAlert.rainTimestamp = now;
-          const title = `🌧️ Google MetNet-3 • ${metNetRainMinutes} Dk Sonra Yağmur!`;
+          lastSentWeatherAlert.lastGlobalTimestamp = now;
+          lastSentWeatherAlert.lastTitle = `🌧️ Google MetNet-3 • ${metNetRainMinutes} Dk Sonra Yağmur!`;
+          const title = lastSentWeatherAlert.lastTitle;
           const msg = `MetNet-3 radar nowcast analizine göre İsdemir sahasına ${metNetRainMinutes} dakika sonra yağış giriyor (~${metNetPrecipTotal.toFixed(1)} mm). Açık sahadaki personeli, elektrikli ekipmanı ve ambarları korumaya alınız!`;
           console.log(`[MetNet-3 Bildirimi]: ${title} -> ${msg}`);
-          sendOneSignalNotification(title, msg, {
+          await sendOneSignalNotification(title, msg, {
             type: 'metnet_nowcast',
             weather_type: 'rain',
             sound: 'rain',
             rainInMinutes: metNetRainMinutes,
           });
+          return;
         }
-      }
-    }
-
-    // 1. YAĞMUR UYARISI (Önümüzdeki 1-3 saat içinde %60+ kesinleşmiş yağmur)
-    if (weatherRes.hourly && weatherRes.hourly.time && weatherRes.hourly.weather_code) {
-      const times = weatherRes.hourly.time;
-      const codes = weatherRes.hourly.weather_code;
-      const probs = weatherRes.hourly.precipitation_probability || [];
-      const rainCodes = [53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99];
-      const nowIso = new Date().toISOString();
-
-      for (let i = 0; i < times.length && i < 4; i++) {
-        const itemTime = times[i];
-        if (itemTime > nowIso.substring(0, 13)) {
-          const prob = probs[i] || 0;
-          if (rainCodes.includes(codes[i]) && prob >= 60) {
-            const rainHour = itemTime.split('T')[1] || itemTime;
-            // 4 saatte 1 defadan fazla atma
-            if (now - lastSentWeatherAlert.rainTimestamp > 4 * 60 * 60 * 1000) {
-              lastSentWeatherAlert.rainTimestamp = now;
-              const title = `🌧️ WeatherNext 3 • Yaklaşan Yağış Uyarısı`;
-              const msg = `Saat ${rainHour} civarında Payas ve İsdemir sahasında %${prob} olasılıkla yağış tespit edildi. Açık saha ve vinç operasyonlarında tedbir alınız.`;
-              console.log(`[Hava Bildirimi]: ${title} -> ${msg}`);
-              sendOneSignalNotification(title, msg, {
-                type: 'weather',
-                weather_type: 'rain',
-                sound: 'rain',
-                time: rainHour,
-              });
-            }
-            break;
-          }
-        }
-      }
-    }
-
-    // 2. GÖKGÜRÜLTÜLÜ FIRTINA & ŞİMŞEK UYARISI
-    if (weatherCode >= 95) {
-      if (now - lastSentWeatherAlert.stormTimestamp > 3 * 60 * 60 * 1000) {
-        lastSentWeatherAlert.stormTimestamp = now;
-        const title = `⚡ WeatherNext 3 • Gökgürültülü Fırtına & Şimşek`;
-        const msg = `Payas ve İSDEMİR mikro-şebekesinde konvektif fırtına ve şimşek tespit edildi. Rıhtım, yüksek vinç ve metal saha personeline tedbir alınız.`;
-        console.log(`[Fırtına Bildirimi]: ${title} -> ${msg}`);
-        sendOneSignalNotification(title, msg, {
-          type: 'weather',
-          weather_type: 'storm',
-          sound: 'thunder',
-        });
-      }
-    }
-
-    // 3. RÜZGAR UYARISI (15 km/s ve Üstü)
-    if (windSpeed >= 15) {
-      if (now - lastSentWeatherAlert.windTimestamp > 3 * 60 * 60 * 1000) {
-        lastSentWeatherAlert.windTimestamp = now;
-        const isCritical = windSpeed >= 35;
-        const title = isCritical
-          ? `💨 WeatherNext 3 • Şiddetli Fırtına Alarmı`
-          : `💨 WeatherNext 3 • Rüzgar Uyarısı (>15 km/s)`;
-        const msg = `Liman sahasında rüzgar hızı ${windSpeed} km/s seviyesine ulaştı. Vinç ve açık saha operasyonlarında tedbir alınız.`;
-        console.log(`[Rüzgar Bildirimi]: ${title} -> ${msg}`);
-        sendOneSignalNotification(title, msg, {
-          type: 'weather',
-          weather_type: 'wind',
-          sound: 'wind',
-          windSpeed,
-        });
-      }
-    }
-
-    // 4. ECMWF AIFS WAVE DENİZ & DALGA UYARISI (0.9m - 1.0m ve 1.0m+ Sınırı)
-    if (waveHeight >= 0.9) {
-      if (now - lastSentWeatherAlert.waveTimestamp > 4 * 60 * 60 * 1000) {
-        lastSentWeatherAlert.waveTimestamp = now;
-        const isCritical = waveHeight >= 1.0;
-        const title = isCritical
-          ? `🌊 AIFS Wave AI • İSDEMİR Yüksek Dalga Alarmı (>1m)`
-          : `🌊 AIFS Wave AI • İSDEMİR Rıhtım Dalga Uyarısı (0.9m - 1.0m)`;
-        const msg = isCritical
-          ? `ECMWF AIFS Wave (36.724, 36.178) analizine göre rıhtımda dalga boyu ${waveHeight}m ile 1 metre sınırını aştı! Gemi bağlama ve rıhtım operasyonlarında acil tedbir alınız.`
-          : `ECMWF AIFS Wave (36.724, 36.178) analizine göre İsdemir açıklarında dalga boyu ${waveHeight} metreye ulaştı. Gemi yanaşma ve palamar operasyonlarında dikkatli olunmalıdır.`;
-        console.log(`[Deniz Bildirimi]: ${title} -> ${msg}`);
-        sendOneSignalNotification(title, msg, {
-          type: 'marine_wave',
-          weather_type: 'wave',
-          sound: 'sea_ambient',
-          waveHeight,
-        });
       }
     }
 
@@ -734,12 +716,30 @@ app.get('/api/weather/current', async (req, res) => {
   }
 });
 
-// Manuel Hava Bildirimi Tetikleme API
+// Manuel / İstemci Hava Bildirimi Tetikleme API (Mükerrer ve Üst Üste Gönderimi Önleme Korumalı)
 app.post('/api/weather/notify', async (req, res) => {
   const { title, message } = req.body;
   if (!title || !message) {
     return res.status(400).json({ error: "title ve message zorunludur" });
   }
+
+  const now = Date.now();
+
+  // 1. Aynı başlık 3 saat içinde zaten gönderildiyse mükerrer say ve gönderme
+  if (lastSentWeatherAlert.lastTitle === title && (now - lastSentWeatherAlert.lastGlobalTimestamp < 3 * 60 * 60 * 1000)) {
+    console.log(`[Hava Bildirimi Engellendi - Mükerrer Gönderim]: "${title}" son 3 saat içinde zaten gönderildi.`);
+    return res.json({ success: true, deduplicated: true });
+  }
+
+  // 2. Herhangi bir hava bildirimi son 1 saat içinde gönderildiyse üst üste yığılmayı önle
+  if (now - lastSentWeatherAlert.lastGlobalTimestamp < 60 * 60 * 1000) {
+    console.log(`[Hava Bildirimi Engellendi - Üst Üste Yığılma Koruması]: Son 60 dk içinde zaten hava bildirimi gönderildi.`);
+    return res.json({ success: true, rateLimited: true });
+  }
+
+  lastSentWeatherAlert.lastGlobalTimestamp = now;
+  lastSentWeatherAlert.lastTitle = title;
+
   const result = await sendOneSignalNotification(title, message, { type: 'manual_weather' });
   res.json({ success: true, result });
 });
