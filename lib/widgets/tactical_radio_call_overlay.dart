@@ -27,6 +27,11 @@ class TacticalRadioCallOverlay {
     required String freq,
     UserModel? user,
   }) {
+    // Kullanıcı zaten telsiz ekranındaysa üstteki RX çağrı bildirimini asla gösterme!
+    if (TelsizScreen.isTelsizActive) {
+      return;
+    }
+
     // Varsa eski kartı kaldır
     dismiss();
 

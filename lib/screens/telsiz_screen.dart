@@ -13,11 +13,16 @@ import '../utils/radio_sound_effects.dart';
 import '../utils/agora_telsiz_service.dart';
 import '../utils/radio_background_service.dart';
 import '../utils/push_service.dart';
+import '../utils/military_radio_ai_service.dart';
 import '../widgets/vip_gate.dart';
+import '../widgets/tactical_radio_call_overlay.dart';
 
 class TelsizScreen extends StatefulWidget {
   final UserModel user;
   final String? initialChannel;
+
+  /// Telsiz ekranının aktif olup olmadığını bildirir (Üstteki RX çağrı overlay'ini engellemek için)
+  static bool isTelsizActive = false;
 
   const TelsizScreen({super.key, required this.user, this.initialChannel});
 
@@ -28,6 +33,7 @@ class TelsizScreen extends StatefulWidget {
 class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMixin {
   final SocketService _socketService = SocketService();
   final AgoraTelsizService _agoraService = AgoraTelsizService();
+  final MilitaryRadioAiService _militaryAi = MilitaryRadioAiService();
   final Map<int, String> _speakerNames = {};
   bool _isAgoraConnected = false;
 
@@ -38,8 +44,12 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
   String? _currentTalkerName; // Konuşan kişinin adı
   List<dynamic> _activeRadioUsers = [];
 
+  // Askeri Taktik Yapay Zeka & DSP Ses Durumu
+  bool _isMilitaryDspActive = true;
+  TacticalRadioTranscript? _latestTranscript;
+
   // Ses Spektrumu (VU Metre) & Donanımsal Ses Tuşu
-  int _liveAudioVolume = 0; // 0 - 255 Agora ses genliği
+  final ValueNotifier<int> _liveAudioVolumeNotifier = ValueNotifier<int>(0); // 0 - 255 Agora ses genliği (Rebuild izole)
   bool _isHardwareKeyPttEnabled = true;
   bool _isVolumeKeyPressed = false;
 
@@ -61,6 +71,9 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
   @override
   void initState() {
     super.initState();
+    TelsizScreen.isTelsizActive = true;
+    TacticalRadioCallOverlay.dismiss();
+
     if (widget.initialChannel != null && _channels.containsKey(widget.initialChannel)) {
       _currentChannel = widget.initialChannel!;
     }
@@ -75,10 +88,20 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
     _waveController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
-    )..repeat(reverse: true);
+    );
 
     // Donanımsal Ses Kısma Tuşunu Telsiz Mandalı (PTT) olarak dinle
     ServicesBinding.instance.keyboard.addHandler(_handleKeyEvent);
+
+    // Askeri Yapay Zeka Altyazı Dinleyicisi
+    _latestTranscript = _militaryAi.recentTranscripts.isNotEmpty ? _militaryAi.recentTranscripts.first : null;
+    _militaryAi.onNewTranscript = (transcript) {
+      if (mounted) {
+        setState(() {
+          _latestTranscript = transcript;
+        });
+      }
+    };
 
     _initSocketListeners();
     _initAgoraService();
@@ -425,11 +448,522 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
     );
   }
 
+  // --- 🪖 ASKERİ TAKTİK ANONS MERKEZİ (MIL-SPEC AI MODAL) ---
+  void _showMilitaryBroadcastModal() {
+    RadioSoundEffects.playSquelchIn();
+    HapticFeedback.heavyImpact();
+
+    String selectedCallSign = 'KOMANDO-1';
+    final customMsgController = TextEditingController();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            final presets = _militaryAi.presets;
+            final channelData = _channels[_currentChannel]!;
+
+            return Container(
+              height: MediaQuery.of(context).size.height * 0.85,
+              decoration: const BoxDecoration(
+                color: Color(0xFF0C1014),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                border: Border(
+                  top: BorderSide(color: Color(0xFF00FF66), width: 2),
+                  left: BorderSide(color: Color(0xFF1E2832), width: 1),
+                  right: BorderSide(color: Color(0xFF1E2832), width: 1),
+                ),
+              ),
+              child: Column(
+                children: [
+                  Container(
+                    margin: const EdgeInsets.only(top: 10, bottom: 8),
+                    width: 44,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 6),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(7),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF00FF66).withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: const Color(0xFF00FF66).withValues(alpha: 0.4)),
+                              ),
+                              child: const Icon(Icons.military_tech_rounded, color: Color(0xFF00FF66), size: 20),
+                            ),
+                            const SizedBox(width: 10),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'ASKERİ TELSİZ ANONS MERKEZİ',
+                                  style: GoogleFonts.orbitron(
+                                    color: Colors.white,
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 1,
+                                  ),
+                                ),
+                                Text(
+                                  '${channelData['name']} // ${channelData['freq']}',
+                                  style: GoogleFonts.orbitron(
+                                    color: const Color(0xFF00FF66),
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Colors.white60),
+                          onPressed: () => Navigator.pop(ctx),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(color: Color(0xFF1E2832), height: 1),
+
+                  Expanded(
+                    child: ListView(
+                      padding: const EdgeInsets.all(16),
+                      children: [
+                        Text(
+                          'OPERASYONEL ÇAĞRI KODU (CALLSIGN)',
+                          style: GoogleFonts.orbitron(
+                            color: Colors.white54,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: ['KOMANDO-1', 'PARS-1', 'İSG-ALARM', 'BOZKURT-9', 'LİMAN-KULE', 'VİNÇ-OPS', 'SIHHİYE'].map((callSign) {
+                            final isSel = selectedCallSign == callSign;
+                            return InkWell(
+                              onTap: () {
+                                HapticFeedback.selectionClick();
+                                setModalState(() => selectedCallSign = callSign);
+                              },
+                              borderRadius: BorderRadius.circular(8),
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 150),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: isSel ? const Color(0xFF00FF66).withValues(alpha: 0.2) : const Color(0xFF141A20),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: isSel ? const Color(0xFF00FF66) : const Color(0xFF1E2832),
+                                    width: isSel ? 1.5 : 1,
+                                  ),
+                                ),
+                                child: Text(
+                                  callSign,
+                                  style: GoogleFonts.orbitron(
+                                    color: isSel ? const Color(0xFF00FF66) : Colors.white70,
+                                    fontSize: 10.5,
+                                    fontWeight: isSel ? FontWeight.w900 : FontWeight.w600,
+                                  ),
+                                ),
+                              ),
+                            );
+                          }).toList(),
+                        ),
+
+                        const SizedBox(height: 18),
+
+                        // Özel Taktik Anons Yazma Alanı
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF12171D),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0xFF1E2832)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  const Icon(Icons.edit_note_rounded, color: Color(0xFF00FF66), size: 16),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    'ÖZEL ASKERİ ANONS YAYINLA',
+                                    style: GoogleFonts.orbitron(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w900,
+                                      letterSpacing: 0.8,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 10),
+                              TextField(
+                                controller: customMsgController,
+                                style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
+                                maxLines: 2,
+                                decoration: InputDecoration(
+                                  hintText: 'Taktik bildirim metnini girin (Örn: Haddehane hat 2 hazır)...',
+                                  hintStyle: GoogleFonts.inter(color: Colors.white30, fontSize: 12),
+                                  filled: true,
+                                  fillColor: const Color(0xFF0A0E12),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(color: Color(0xFF1E2832)),
+                                  ),
+                                  focusedBorder: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                    borderSide: const BorderSide(color: Color(0xFF00FF66)),
+                                  ),
+                                  contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                ),
+                              ),
+                              const SizedBox(height: 10),
+                              SizedBox(
+                                width: double.infinity,
+                                child: ElevatedButton.icon(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF00FF66),
+                                    foregroundColor: Colors.black,
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                                  ),
+                                  icon: const Icon(Icons.campaign_rounded, size: 18),
+                                  label: Text(
+                                    'ANONSU FREKANSA İLET [TAMAM!]',
+                                    style: GoogleFonts.orbitron(fontSize: 11.5, fontWeight: FontWeight.w900),
+                                  ),
+                                  onPressed: () async {
+                                    final text = customMsgController.text.trim();
+                                    if (text.isEmpty) return;
+                                    final messenger = ScaffoldMessenger.of(context);
+                                    Navigator.pop(ctx);
+                                    HapticFeedback.heavyImpact();
+
+                                    await _militaryAi.broadcastCustomTacticalAnnouncement(
+                                      userId: widget.user.id,
+                                      inviterName: widget.user.fullName.isNotEmpty ? widget.user.fullName : 'Taktik Personel',
+                                      channel: _currentChannel,
+                                      callSign: selectedCallSign,
+                                      customMessage: text,
+                                    );
+
+                                    if (mounted) {
+                                      messenger.showSnackBar(
+                                        SnackBar(
+                                          backgroundColor: const Color(0xFF14191D),
+                                          content: Row(
+                                            children: [
+                                              const Icon(Icons.check_circle_rounded, color: Color(0xFF00FF66)),
+                                              const SizedBox(width: 10),
+                                              Expanded(
+                                                child: Text('[$selectedCallSign] askeri anonsu frekansa yayınlandı!'),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      );
+                                    }
+                                  },
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 20),
+
+                        Text(
+                          'TEK DOKUNUŞLA TAKTİK ANONS ŞABLONLARI',
+                          style: GoogleFonts.orbitron(
+                            color: Colors.white54,
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            letterSpacing: 0.8,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        ...presets.map((p) {
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 10),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF10151B),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(color: p.badgeColor.withValues(alpha: 0.3)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(p.icon, color: p.badgeColor, size: 18),
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: p.badgeColor.withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(6),
+                                        border: Border.all(color: p.badgeColor.withValues(alpha: 0.4)),
+                                      ),
+                                      child: Text(
+                                        p.callSign,
+                                        style: GoogleFonts.orbitron(
+                                          color: p.badgeColor,
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        p.title,
+                                        style: GoogleFonts.orbitron(
+                                          color: Colors.white,
+                                          fontSize: 11.5,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                    ElevatedButton(
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: p.badgeColor,
+                                        foregroundColor: Colors.black,
+                                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                      ),
+                                      onPressed: () async {
+                                        final messenger = ScaffoldMessenger.of(context);
+                                        Navigator.pop(ctx);
+                                        HapticFeedback.heavyImpact();
+
+                                        await _militaryAi.broadcastTacticalAnnouncement(
+                                          userId: widget.user.id,
+                                          inviterName: widget.user.fullName.isNotEmpty ? widget.user.fullName : 'Taktik Personel',
+                                          channel: _currentChannel,
+                                          preset: p,
+                                        );
+
+                                        if (mounted) {
+                                          messenger.showSnackBar(
+                                            SnackBar(
+                                              backgroundColor: const Color(0xFF14191D),
+                                              content: Row(
+                                                children: [
+                                                  Icon(Icons.check_circle_rounded, color: p.badgeColor),
+                                                  const SizedBox(width: 10),
+                                                  Expanded(
+                                                    child: Text('[${p.callSign}] Taktik anonsu tüm kanala yayınlandı!'),
+                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }
+                                      },
+                                      child: Text(
+                                        'YAYINLA',
+                                        style: GoogleFonts.orbitron(fontSize: 10, fontWeight: FontWeight.w900),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  '"${p.message}"',
+                                  style: GoogleFonts.inter(
+                                    color: Colors.white70,
+                                    fontSize: 12,
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  // --- 📝 CANLI TAKTİK İLETİŞİM VE ALTYAZI GÜNLÜĞÜ MODALI ---
+  void _showTacticalCommsLogModal() {
+    RadioSoundEffects.playSquelchIn();
+    HapticFeedback.selectionClick();
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final list = _militaryAi.recentTranscripts;
+
+        return Container(
+          height: MediaQuery.of(context).size.height * 0.75,
+          decoration: const BoxDecoration(
+            color: Color(0xFF0C1014),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(
+              top: BorderSide(color: Color(0xFF00E5FF), width: 2),
+              left: BorderSide(color: Color(0xFF1E2832), width: 1),
+              right: BorderSide(color: Color(0xFF1E2832), width: 1),
+            ),
+          ),
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.only(top: 10, bottom: 8),
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.receipt_long_rounded, color: Color(0xFF00E5FF), size: 20),
+                        const SizedBox(width: 10),
+                        Text(
+                          'CANLI TELSİZ ALTYAZI GÜNLÜĞÜ',
+                          style: GoogleFonts.orbitron(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w900),
+                        ),
+                      ],
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close_rounded, color: Colors.white60),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(color: Color(0xFF1E2832), height: 1),
+              Expanded(
+                child: list.isEmpty
+                    ? Center(
+                        child: Text(
+                          'Henüz telsiz iletişimi kaydedilmedi.',
+                          style: GoogleFonts.inter(color: Colors.white38, fontSize: 13),
+                        ),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: list.length,
+                        separatorBuilder: (c, i) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final tr = list[index];
+                          final isEmg = tr.isEmergency;
+
+                          return Container(
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              color: isEmg ? const Color(0xFFFF2A2A).withValues(alpha: 0.1) : const Color(0xFF12171E),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isEmg ? const Color(0xFFFF2A2A) : const Color(0xFF1E2832),
+                                width: isEmg ? 1.5 : 1.0,
+                              ),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                      decoration: BoxDecoration(
+                                        color: (isEmg ? const Color(0xFFFF2A2A) : const Color(0xFF00FF66)).withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(5),
+                                      ),
+                                      child: Text(
+                                        tr.callSign,
+                                        style: GoogleFonts.orbitron(
+                                          color: isEmg ? const Color(0xFFFF2A2A) : const Color(0xFF00FF66),
+                                          fontSize: 9.5,
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        tr.speakerName,
+                                        style: GoogleFonts.inter(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold),
+                                      ),
+                                    ),
+                                    Text(
+                                      tr.time,
+                                      style: GoogleFonts.orbitron(color: Colors.white38, fontSize: 9.5),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                Text(
+                                  tr.text,
+                                  style: GoogleFonts.inter(
+                                    color: isEmg ? const Color(0xFFFF8080) : Colors.white70,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                                const SizedBox(height: 4),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      'AI GÜVEN: %${(tr.confidence * 100).toInt()}',
+                                      style: GoogleFonts.orbitron(color: const Color(0xFF00FF66).withValues(alpha: 0.6), fontSize: 8.5),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   void dispose() {
+    TelsizScreen.isTelsizActive = false;
+    TacticalRadioCallOverlay.dismiss();
     ServicesBinding.instance.keyboard.removeHandler(_handleKeyEvent);
     _pulseController.dispose();
     _waveController.dispose();
+    _liveAudioVolumeNotifier.dispose();
     _transmitTimer?.cancel();
     if (_isPoweringOff) {
       _agoraService.leaveChannel();
@@ -465,6 +999,10 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
       final name = data['name'] ?? 'Bilinmeyen Personel';
       _isReceiving = true;
       _currentTalkerName = name;
+      _militaryAi.processIncomingSpeech(
+        speakerName: name,
+        channelCode: _currentChannel,
+      );
       RadioSoundEffects.playSquelchIn();
       final channelData = _channels[_currentChannel]!;
       RadioBackgroundService.updateNotification(
@@ -506,9 +1044,16 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
       final name = _speakerNames[remoteUid] ?? 'Telsiz Personeli';
       if (!_isReceiving) {
         RadioSoundEffects.playSquelchIn();
+        _militaryAi.processIncomingSpeech(
+          speakerName: name,
+          channelCode: _currentChannel,
+        );
       }
       _isReceiving = true;
       _currentTalkerName = name;
+      if (!_waveController.isAnimating) {
+        _waveController.repeat(reverse: true);
+      }
       final channelData = _channels[_currentChannel]!;
       RadioBackgroundService.updateNotification(
         title: '🎙️ $name Konuşuyor...',
@@ -521,10 +1066,8 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
 
     _agoraService.onAudioVolumeChanged = (volume, isLocal) {
       if (!mounted) return;
-      if (_liveAudioVolume != volume) {
-        setState(() {
-          _liveAudioVolume = volume;
-        });
+      if (_liveAudioVolumeNotifier.value != volume) {
+        _liveAudioVolumeNotifier.value = volume;
       }
     };
 
@@ -535,7 +1078,10 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
       }
       _isReceiving = false;
       _currentTalkerName = null;
-      _liveAudioVolume = 0;
+      _liveAudioVolumeNotifier.value = 0;
+      if (!_isTransmitting) {
+        _waveController.stop();
+      }
       final channelData = _channels[_currentChannel]!;
       RadioBackgroundService.updateNotification(
         title: '📻 İSDEMİR Telsiz Dinleniyor',
@@ -608,6 +1154,10 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
       _transmitSeconds = 0;
     });
 
+    if (!_waveController.isAnimating) {
+      _waveController.repeat(reverse: true);
+    }
+
     HapticFeedback.heavyImpact();
     RadioSoundEffects.playSquelchIn();
 
@@ -654,9 +1204,13 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
     HapticFeedback.mediumImpact();
     _transmitTimer?.cancel();
 
+    if (!_isReceiving) {
+      _waveController.stop();
+    }
+    _liveAudioVolumeNotifier.value = 0;
+
     setState(() {
       _isTransmitting = false;
-      _liveAudioVolume = 0;
     });
 
     // 1. Agora Mikrofonunu Kapat
@@ -675,7 +1229,14 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
       text: 'Kanal: ${channelData['name']} (${channelData['freq']})',
     );
 
-    // 3. Roger Beep
+    // 3. Kullanıcı konuşmasını taktik altyazıya ekle
+    _militaryAi.processIncomingSpeech(
+      speakerName: '${widget.user.fullName.isNotEmpty ? widget.user.fullName : "Taktik Personel"} (Ben)',
+      channelCode: _currentChannel,
+      rawText: 'Saha kontrolü tamamlandı, frekans dinlemede, tamam!',
+    );
+
+    // 4. Roger Beep
     RadioSoundEffects.playRogerBeep();
   }
 
@@ -832,52 +1393,75 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
       body: SafeArea(
         child: Column(
           children: [
-            const SizedBox(height: 6),
+            Expanded(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 6),
 
-            // 1. ASKERİ OLED TELSİZ HUD EKRANI
-            _buildTacticalHeader(channelData)
-                .animate()
-                .fadeIn(duration: 350.ms)
-                .slideY(begin: -0.05, end: 0),
+                    // 1. ASKERİ OLED TELSİZ HUD EKRANI
+                    _buildTacticalHeader(channelData)
+                        .animate()
+                        .fadeIn(duration: 350.ms)
+                        .slideY(begin: -0.05, end: 0),
 
-            const SizedBox(height: 10),
+                    const SizedBox(height: 8),
 
-            // 2. KANAL SEÇİM PANELİ (FREKANS KANALLARI)
-            _buildChannelSelector()
-                .animate()
-                .fadeIn(duration: 400.ms, delay: 100.ms),
+                    // 2. CANLI TAKTİK ALTYAZI (STT) HUD ŞERİDİ
+                    _buildTacticalSubtitleHud()
+                        .animate()
+                        .fadeIn(duration: 380.ms, delay: 60.ms),
 
-            const SizedBox(height: 10),
+                    const SizedBox(height: 8),
 
-            // 3. CANLI TAKTİK RADAR / FREKANTAKİ OPERATÖRLER
-            _buildActivePersonnelSection()
-                .animate()
-                .fadeIn(duration: 400.ms, delay: 150.ms),
+                    // 3. ASKERİ DSP SES FİLTRESİ & YAPAY ZEKA ANONS KONTROL ŞERİDİ
+                    _buildMilitaryControlRow()
+                        .animate()
+                        .fadeIn(duration: 400.ms, delay: 100.ms),
 
-            const Spacer(),
+                    const SizedBox(height: 8),
 
-            // 4. CANLI SES SPEKTRUMU / 28-BAND EQUALIZER
+                    // 4. KANAL SEÇİM PANELİ (FREKANS KANALLARI)
+                    _buildChannelSelector()
+                        .animate()
+                        .fadeIn(duration: 400.ms, delay: 130.ms),
+
+                    const SizedBox(height: 8),
+
+                    // 5. CANLI TAKTİK RADAR / FREKANTAKİ OPERATÖRLER
+                    _buildActivePersonnelSection()
+                        .animate()
+                        .fadeIn(duration: 400.ms, delay: 160.ms),
+
+                    const SizedBox(height: 10),
+                  ],
+                ),
+              ),
+            ),
+
+            // 6. CANLI SES SPEKTRUMU / 28-BAND EQUALIZER
             _buildAudioWaveform(),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
 
-            // 5. HAVACILIK TİPİ MOD SEÇİCİ (BASILI TUT / DOKUN-KONUŞ)
+            // 7. HAVACILIK TİPİ MOD SEÇİCİ (BASILI TUT / DOKUN-KONUŞ)
             _buildModeSelector(),
 
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
 
-            // 5.1 DONANIMSAL SES TUŞU PTT BİLGİ VE AYAR ROZETİ
+            // 7.1 DONANIMSAL SES TUŞU PTT BİLGİ VE AYAR ROZETİ
             _buildHardwareKeyPttBadge(),
 
-            const SizedBox(height: 12),
+            const SizedBox(height: 10),
 
-            // 6. KONSANTRİK 3D TİTANYUM PTT BUTONU (AVATAR GLOW)
+            // 8. KONSANTRİK 3D TİTANYUM PTT BUTONU + TAKTİK RETİKÜL
             _buildPttButton()
                 .animate()
-                .fadeIn(duration: 500.ms, delay: 200.ms)
+                .fadeIn(duration: 500.ms, delay: 180.ms)
                 .scale(begin: const Offset(0.92, 0.92), end: const Offset(1, 1)),
 
-            const SizedBox(height: 18),
+            const SizedBox(height: 12),
           ],
         ),
       ),
@@ -1161,7 +1745,249 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
     );
   }
 
-  // --- 2. ASKERİ KANAL SEÇİM BUTONLARI (TACTICAL SELECTOR) ---
+  // --- 2. CANLI TAKTİK ALTYAZI (STT) HUD ŞERİDİ ---
+  Widget _buildTacticalSubtitleHud() {
+    final tr = _latestTranscript;
+    final isEmg = tr != null && tr.isEmergency;
+
+    return InkWell(
+      onTap: _showTacticalCommsLogModal,
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 14),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A0E12),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isEmg
+                ? const Color(0xFFFF2A2A)
+                : (_isReceiving ? const Color(0xFF00FF66) : const Color(0xFF1E2832)),
+            width: isEmg ? 1.5 : 1.0,
+          ),
+          boxShadow: isEmg
+              ? [BoxShadow(color: const Color(0xFFFF2A2A).withValues(alpha: 0.25), blurRadius: 8)]
+              : null,
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 7,
+              height: 7,
+              decoration: BoxDecoration(
+                color: isEmg
+                    ? const Color(0xFFFF2A2A)
+                    : (_isReceiving ? const Color(0xFF00FF66) : const Color(0xFF00E5FF)),
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(
+                    color: (isEmg ? const Color(0xFFFF2A2A) : const Color(0xFF00FF66)).withValues(alpha: 0.8),
+                    blurRadius: 5,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+              decoration: BoxDecoration(
+                color: (isEmg ? const Color(0xFFFF2A2A) : const Color(0xFF00FF66)).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(
+                tr != null ? tr.callSign : 'STT // HUD',
+                style: GoogleFonts.orbitron(
+                  color: isEmg ? const Color(0xFFFF2A2A) : const Color(0xFF00FF66),
+                  fontSize: 8.5,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                tr != null ? '"${tr.text}"' : 'Canlı taktik altyazı motoru dinlemede...',
+                style: GoogleFonts.inter(
+                  color: isEmg ? const Color(0xFFFF8080) : Colors.white70,
+                  fontSize: 11,
+                  fontStyle: tr != null ? FontStyle.italic : FontStyle.normal,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 6),
+            const Icon(Icons.history_rounded, color: Colors.white38, size: 14),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // --- 3. ASKERİ DSP SES FİLTRESİ & YAPAY ZEKA ANONS KONTROL ŞERİDİ ---
+  Widget _buildMilitaryControlRow() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      child: Row(
+        children: [
+          // 1. Askeri Ses DSP Filtresi Aç/Kapat Butonu
+          Expanded(
+            child: InkWell(
+              onTap: () async {
+                HapticFeedback.heavyImpact();
+                RadioSoundEffects.playSquelchIn();
+                final newState = !_isMilitaryDspActive;
+                await _agoraService.setMilitaryVoiceFilter(enable: newState);
+                setState(() {
+                  _isMilitaryDspActive = newState;
+                });
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      duration: const Duration(seconds: 2),
+                      backgroundColor: const Color(0xFF14191D),
+                      content: Row(
+                        children: [
+                          Icon(
+                            newState ? Icons.military_tech_rounded : Icons.mic_rounded,
+                            color: newState ? const Color(0xFF00FF66) : Colors.white70,
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              newState
+                                  ? '🪖 Askeri Taktik Filtre (Harris AN/PRC-152): AKTİF'
+                                  : '🎙️ Doğal Mikrofon Sesi: AKTİF',
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }
+              },
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: _isMilitaryDspActive
+                      ? const Color(0xFF00FF66).withValues(alpha: 0.1)
+                      : const Color(0xFF0E1318),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _isMilitaryDspActive
+                        ? const Color(0xFF00FF66).withValues(alpha: 0.6)
+                        : const Color(0xFF1E2832),
+                    width: 1.2,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.military_tech_rounded,
+                      color: _isMilitaryDspActive ? const Color(0xFF00FF66) : Colors.white38,
+                      size: 16,
+                    ),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'ASKERİ DSP SESİ',
+                            style: GoogleFonts.orbitron(
+                              color: _isMilitaryDspActive ? Colors.white : Colors.white60,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          Text(
+                            _isMilitaryDspActive ? 'PRC-152 // AKTİF' : 'DOĞAL MOD // KAPALI',
+                            style: GoogleFonts.orbitron(
+                              color: _isMilitaryDspActive ? const Color(0xFF00FF66) : Colors.white38,
+                              fontSize: 7.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: _isMilitaryDspActive ? const Color(0xFF00FF66) : const Color(0xFF333333),
+                        shape: BoxShape.circle,
+                        boxShadow: _isMilitaryDspActive
+                            ? [const BoxShadow(color: Color(0xFF00FF66), blurRadius: 4)]
+                            : null,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+
+          // 2. Askeri AI Anons Butonu
+          Expanded(
+            child: InkWell(
+              onTap: _showMilitaryBroadcastModal,
+              borderRadius: BorderRadius.circular(12),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFF00E5FF).withValues(alpha: 0.15),
+                      const Color(0xFF00FF66).withValues(alpha: 0.1),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.5), width: 1.2),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.record_voice_over_rounded, color: Color(0xFF00E5FF), size: 16),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            'ASKERİ ANONS (AI)',
+                            style: GoogleFonts.orbitron(
+                              color: Colors.white,
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          Text(
+                            'KODLU YAYIN BAŞLAT',
+                            style: GoogleFonts.orbitron(
+                              color: const Color(0xFF00E5FF),
+                              fontSize: 7.5,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.send_rounded, color: Color(0xFF00E5FF), size: 12),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // --- 4. ASKERİ KANAL SEÇİM BUTONLARI (TACTICAL SELECTOR) ---
   Widget _buildChannelSelector() {
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
@@ -1430,188 +2256,190 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
     );
   }
 
-  // --- 4. CANLI SES SPEKTRUMU / GERÇEK ZAMANLI DİNAMİK VU METRE ---
+  // --- 4. CANLI SES SPEKTRUMU / GERÇEK ZAMANLI DİNAMİK VU METRE (60/120 FPS Optimize) ---
   Widget _buildAudioWaveform() {
     final isActive = _isTransmitting || _isReceiving;
 
-    return AnimatedBuilder(
-      animation: _waveController,
-      builder: (context, child) {
-        // Agora ses seviyesi (0-255) normalize faktörü (0.05 - 1.0)
-        final volNorm = (_liveAudioVolume / 140.0).clamp(0.0, 1.0);
-        final effectiveVol = isActive ? (volNorm > 0.05 ? volNorm : 0.12) : 0.0;
-        final isLoud = effectiveVol > 0.65;
-        final isPeak = effectiveVol > 0.88;
+    return RepaintBoundary(
+      child: ListenableBuilder(
+        listenable: Listenable.merge([_waveController, _liveAudioVolumeNotifier]),
+        builder: (context, child) {
+          final liveVol = _liveAudioVolumeNotifier.value;
+          // Agora ses seviyesi (0-255) normalize faktörü (0.05 - 1.0)
+          final volNorm = (liveVol / 140.0).clamp(0.0, 1.0);
+          final effectiveVol = isActive ? (volNorm > 0.05 ? volNorm : 0.12) : 0.0;
+          final isLoud = effectiveVol > 0.65;
+          final isPeak = effectiveVol > 0.88;
 
-        // Anlık dB hesaplaması
-        final dbDisplay = isActive
-            ? (effectiveVol > 0.08 ? '-${((1.0 - effectiveVol) * 36).round()} dB' : '-42 dB')
-            : 'SQUELCH';
+          // Anlık dB hesaplaması
+          final dbDisplay = isActive
+              ? (effectiveVol > 0.08 ? '-${((1.0 - effectiveVol) * 36).round()} dB' : '-42 dB')
+              : 'SQUELCH';
 
-        return Container(
-          height: 70,
-          margin: const EdgeInsets.symmetric(horizontal: 18),
-          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0C1014),
-            borderRadius: BorderRadius.circular(14),
-            border: Border.all(
-              color: isActive
-                  ? (_isTransmitting
-                      ? (isPeak ? const Color(0xFFFF2A55) : const Color(0xFFFFB300))
-                      : const Color(0xFF00FF66))
-                  : const Color(0xFF1B242C),
-              width: isActive ? 1.5 : 1.0,
+          return Container(
+            height: 70,
+            margin: const EdgeInsets.symmetric(horizontal: 18),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0C1014),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isActive
+                    ? (_isTransmitting
+                        ? (isPeak ? const Color(0xFFFF2A55) : const Color(0xFFFFB300))
+                        : const Color(0xFF00FF66))
+                    : const Color(0xFF1B242C),
+                width: isActive ? 1.5 : 1.0,
+              ),
+              boxShadow: isActive
+                  ? [
+                      BoxShadow(
+                        color: (_isTransmitting
+                                ? (isPeak ? const Color(0xFFFF2A55) : const Color(0xFFFFB300))
+                                : const Color(0xFF00FF66))
+                            .withValues(alpha: 0.25),
+                        blurRadius: 10,
+                        spreadRadius: 1,
+                      )
+                    ]
+                  : null,
             ),
-            boxShadow: isActive
-                ? [
-                    BoxShadow(
-                      color: (_isTransmitting
-                              ? (isPeak ? const Color(0xFFFF2A55) : const Color(0xFFFFB300))
-                              : const Color(0xFF00FF66))
-                          .withValues(alpha: 0.25),
-                      blurRadius: 10,
-                      spreadRadius: 1,
-                    )
-                  ]
-                : null,
-          ),
-          child: Column(
-            children: [
-              // Üst Durum Çubuğu (dB Değeri, Peak LED, Durum Rozeti)
-              Row(
-                children: [
-                  Text(
-                    isActive ? (_isTransmitting ? 'TX MIC VU METRE' : 'RX GELEN SES') : 'RF STANDBY',
-                    style: GoogleFonts.orbitron(
-                      color: isActive
-                          ? (_isTransmitting ? const Color(0xFFFF2A55) : const Color(0xFF00FF66))
-                          : Colors.white38,
-                      fontSize: 8.5,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1.0,
-                    ),
-                  ),
-                  const Spacer(),
-                  // Peak Clip LED
-                  Container(
-                    width: 6,
-                    height: 6,
-                    decoration: BoxDecoration(
-                      color: isPeak ? const Color(0xFFFF2A55) : const Color(0xFF222B34),
-                      shape: BoxShape.circle,
-                      boxShadow: isPeak
-                          ? [
-                              BoxShadow(
-                                color: const Color(0xFFFF2A55).withValues(alpha: 0.9),
-                                blurRadius: 6,
-                                spreadRadius: 1.5,
-                              )
-                            ]
-                          : null,
-                    ),
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    'PEAK',
-                    style: GoogleFonts.orbitron(
-                      color: isPeak ? const Color(0xFFFF2A55) : Colors.white24,
-                      fontSize: 7.5,
-                      fontWeight: FontWeight.w900,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  // Anlık dB göstergesi
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(4),
-                      border: Border.all(color: Colors.white12),
-                    ),
-                    child: Text(
-                      dbDisplay,
+            child: Column(
+              children: [
+                // Üst Durum Çubuğu (dB Değeri, Peak LED, Durum Rozeti)
+                Row(
+                  children: [
+                    Text(
+                      isActive ? (_isTransmitting ? 'TX MIC VU METRE' : 'RX GELEN SES') : 'RF STANDBY',
                       style: GoogleFonts.orbitron(
-                        color: isPeak
-                            ? const Color(0xFFFF2A55)
-                            : (isLoud ? const Color(0xFFFFB300) : const Color(0xFF00FF66)),
-                        fontSize: 8,
+                        color: isActive
+                            ? (_isTransmitting ? const Color(0xFFFF2A55) : const Color(0xFF00FF66))
+                            : Colors.white38,
+                        fontSize: 8.5,
                         fontWeight: FontWeight.w900,
+                        letterSpacing: 1.0,
                       ),
                     ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-
-              // Dalga Çubukları (28 Spektrum Bandı)
-              Expanded(
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: List.generate(28, (index) {
-                    double height = 4.0;
-                    Color barColor = const Color(0xFF1E2832);
-
-                    if (isActive) {
-                      // Çan eğrisi (Gaussian) dağılımı: Merkez konuşma frekansları daha yüksek zıplar
-                      final dist = (index - 13.5).abs() / 14.0;
-                      final bell = exp(-dist * dist * 3.2);
-
-                      // Canlı Agora ses genliği + harmonik hareket
-                      final wavePhase = (_waveController.value * 2 * pi * 2) + (index * 0.45);
-                      final harmonic = 0.65 + 0.35 * sin(wavePhase);
-
-                      height = 5.0 + (effectiveVol * bell * 36.0 * harmonic);
-                      height = height.clamp(4.0, 42.0);
-
-                      // Renk gradyanı: Yeşil -> Sarı -> Kırmızı Peak
-                      if (_isTransmitting) {
-                        if (effectiveVol > 0.85 && bell > 0.6) {
-                          barColor = const Color(0xFFFF2A55);
-                        } else if (effectiveVol > 0.55 && bell > 0.4) {
-                          barColor = const Color(0xFFFFB300);
-                        } else {
-                          barColor = const Color(0xFF00FF66);
-                        }
-                      } else {
-                        // RX dinleme modu
-                        if (effectiveVol > 0.8) {
-                          barColor = const Color(0xFF00E5FF);
-                        } else {
-                          barColor = const Color(0xFF00FF66);
-                        }
-                      }
-                    } else {
-                      // Boşta iken organik RF taşıyıcı hışırtı dalgalanması
-                      final idlePhase = (_waveController.value * 2 * pi) + (index * 0.3);
-                      height = 3.5 + 2.5 * (0.5 + 0.5 * sin(idlePhase));
-                      barColor = const Color(0xFF1B242C);
-                    }
-
-                    return Container(
-                      width: 3.8,
-                      height: height,
+                    const Spacer(),
+                    // Peak Clip LED
+                    Container(
+                      width: 6,
+                      height: 6,
                       decoration: BoxDecoration(
-                        color: barColor,
-                        borderRadius: BorderRadius.circular(2),
-                        boxShadow: isActive && effectiveVol > 0.15
+                        color: isPeak ? const Color(0xFFFF2A55) : const Color(0xFF222B34),
+                        shape: BoxShape.circle,
+                        boxShadow: isPeak
                             ? [
                                 BoxShadow(
-                                  color: barColor.withValues(alpha: 0.6),
-                                  blurRadius: 3,
+                                  color: const Color(0xFFFF2A55).withValues(alpha: 0.9),
+                                  blurRadius: 6,
+                                  spreadRadius: 1.5,
                                 )
                               ]
                             : null,
                       ),
-                    );
-                  }),
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'PEAK',
+                      style: GoogleFonts.orbitron(
+                        color: isPeak ? const Color(0xFFFF2A55) : Colors.white24,
+                        fontSize: 7.5,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    // Anlık dB göstergesi
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.black54,
+                        borderRadius: BorderRadius.circular(4),
+                        border: Border.all(color: Colors.white12),
+                      ),
+                      child: Text(
+                        dbDisplay,
+                        style: GoogleFonts.orbitron(
+                          color: isPeak
+                              ? const Color(0xFFFF2A55)
+                              : (isLoud ? const Color(0xFFFFB300) : const Color(0xFF00FF66)),
+                          fontSize: 8,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
-        );
-      },
+                const SizedBox(height: 4),
+
+                // Dalga Çubukları (28 Spektrum Bandı)
+                Expanded(
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: List.generate(28, (index) {
+                      double height = 4.0;
+                      Color barColor = const Color(0xFF1E2832);
+
+                      if (isActive) {
+                        // Çan eğrisi (Gaussian) dağılımı: Merkez konuşma frekansları daha yüksek zıplar
+                        final dist = (index - 13.5).abs() / 14.0;
+                        final bell = exp(-dist * dist * 3.2);
+
+                        // Canlı Agora ses genliği + harmonik hareket
+                        final wavePhase = (_waveController.value * 2 * pi * 2) + (index * 0.45);
+                        final harmonic = 0.65 + 0.35 * sin(wavePhase);
+
+                        height = 5.0 + (effectiveVol * bell * 36.0 * harmonic);
+                        height = height.clamp(4.0, 42.0);
+
+                        // Renk gradyanı: Yeşil -> Sarı -> Kırmızı Peak
+                        if (_isTransmitting) {
+                          if (effectiveVol > 0.85 && bell > 0.6) {
+                            barColor = const Color(0xFFFF2A55);
+                          } else if (effectiveVol > 0.55 && bell > 0.4) {
+                            barColor = const Color(0xFFFFB300);
+                          } else {
+                            barColor = const Color(0xFF00FF66);
+                          }
+                        } else {
+                          // RX dinleme modu
+                          if (effectiveVol > 0.8) {
+                            barColor = const Color(0xFF00E5FF);
+                          } else {
+                            barColor = const Color(0xFF00FF66);
+                          }
+                        }
+                      } else {
+                        // Boşta iken organik gereksiz render yok, statik squelch çubukları
+                        height = 4.0;
+                        barColor = const Color(0xFF1A222A);
+                      }
+
+                      return Container(
+                        width: 3.8,
+                        height: height,
+                        decoration: BoxDecoration(
+                          color: barColor,
+                          borderRadius: BorderRadius.circular(2),
+                          boxShadow: isActive && effectiveVol > 0.15
+                              ? [
+                                  BoxShadow(
+                                    color: barColor.withValues(alpha: 0.6),
+                                    blurRadius: 3,
+                                  )
+                                ]
+                              : null,
+                        ),
+                      );
+                    }),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
     );
   }
 
@@ -1784,140 +2612,182 @@ class _TelsizScreenState extends State<TelsizScreen> with TickerProviderStateMix
     );
   }
 
-  // --- 6. 3D KONSANTRİK TİTANYUM PTT BUTONU (AVATAR GLOW) ---
+  // --- RETİKÜL KÖŞE PARÇASI (MIL-SPEC HUD CORNER BRACKET) ---
+  Widget _buildReticleCorner({required bool top, required bool left, required Color color}) {
+    return Positioned(
+      top: top ? 4 : null,
+      bottom: !top ? 4 : null,
+      left: left ? 4 : null,
+      right: !left ? 4 : null,
+      child: Container(
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(
+          border: Border(
+            top: top ? BorderSide(color: color, width: 2.2) : BorderSide.none,
+            bottom: !top ? BorderSide(color: color, width: 2.2) : BorderSide.none,
+            left: left ? BorderSide(color: color, width: 2.2) : BorderSide.none,
+            right: !left ? BorderSide(color: color, width: 2.2) : BorderSide.none,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // --- 8. 3D KONSANTRİK TİTANYUM PTT BUTONU + TAKTİK RETİKÜL ---
   Widget _buildPttButton() {
     final glowColor = _isTransmitting
         ? const Color(0xFFFF2A55)
         : (_isReceiving ? const Color(0xFF00FF66) : const Color(0xFF00E5FF).withValues(alpha: 0.2));
 
+    final reticleColor = _isTransmitting
+        ? const Color(0xFFFF2A55)
+        : (_isReceiving ? const Color(0xFF00FF66) : const Color(0xFF1E2832));
+
     return Column(
       children: [
-        AvatarGlow(
-          animate: _isTransmitting || _isReceiving,
-          glowColor: glowColor,
-          glowRadiusFactor: _isTransmitting ? 0.45 : 0.3,
-          duration: const Duration(milliseconds: 1400),
-          repeat: true,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
-              if (_isToggleMode) {
-                if (_isTransmitting) {
-                  _stopTalking();
-                } else {
-                  _startTalking();
-                }
-              } else {
-                if (!_isTransmitting) {
-                  _startTalking();
-                  Future.delayed(const Duration(milliseconds: 2000), () {
-                    if (mounted && _isTransmitting && !_isToggleMode) {
+        SizedBox(
+          width: 200,
+          height: 200,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // 4 Taktik Retikül Köşesi (Mil-Spec Targeting Brackets)
+              _buildReticleCorner(top: true, left: true, color: reticleColor),
+              _buildReticleCorner(top: true, left: false, color: reticleColor),
+              _buildReticleCorner(top: false, left: true, color: reticleColor),
+              _buildReticleCorner(top: false, left: false, color: reticleColor),
+
+              // Ana PTT Butonu & Avatar Glow
+              AvatarGlow(
+                animate: _isTransmitting || _isReceiving,
+                glowColor: glowColor,
+                glowRadiusFactor: _isTransmitting ? 0.45 : 0.3,
+                duration: const Duration(milliseconds: 1400),
+                repeat: true,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    if (_isToggleMode) {
+                      if (_isTransmitting) {
+                        _stopTalking();
+                      } else {
+                        _startTalking();
+                      }
+                    } else {
+                      if (!_isTransmitting) {
+                        _startTalking();
+                        Future.delayed(const Duration(milliseconds: 2000), () {
+                          if (mounted && _isTransmitting && !_isToggleMode) {
+                            _stopTalking();
+                          }
+                        });
+                      } else {
+                        _stopTalking();
+                      }
+                    }
+                  },
+                  onLongPressStart: (_) {
+                    if (!_isToggleMode && !_isTransmitting) {
+                      _startTalking();
+                    }
+                  },
+                  onLongPressEnd: (_) {
+                    if (!_isToggleMode && _isTransmitting) {
                       _stopTalking();
                     }
-                  });
-                } else {
-                  _stopTalking();
-                }
-              }
-            },
-            onLongPressStart: (_) {
-              if (!_isToggleMode && !_isTransmitting) {
-                _startTalking();
-              }
-            },
-            onLongPressEnd: (_) {
-              if (!_isToggleMode && _isTransmitting) {
-                _stopTalking();
-              }
-            },
-            child: Container(
-              width: 175,
-              height: 175,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: const RadialGradient(
-                  colors: [Color(0xFF222C36), Color(0xFF0C1014)],
-                  radius: 0.9,
-                ),
-                border: Border.all(
-                  color: _isTransmitting
-                      ? const Color(0xFFFF2A55)
-                      : (_isReceiving ? const Color(0xFF00FF66) : const Color(0xFF2A3744)),
-                  width: 3.5,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: (_isTransmitting ? const Color(0xFFFF2A55) : const Color(0xFF00FF66)).withValues(
-                      alpha: _isTransmitting ? 0.6 : (_isReceiving ? 0.4 : 0.15),
-                    ),
-                    blurRadius: _isTransmitting ? 32 : 18,
-                    spreadRadius: _isTransmitting ? 4 : 1,
-                  ),
-                ],
-              ),
-              child: Center(
-                // İkinci Halka: Yivli Alaşım
-                child: Container(
-                  width: 140,
-                  height: 140,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    border: Border.all(
-                      color: _isTransmitting
-                          ? const Color(0xFFFF2A55).withValues(alpha: 0.5)
-                          : (_isReceiving ? const Color(0xFF00FF66).withValues(alpha: 0.5) : Colors.white12),
-                      width: 1.5,
-                    ),
-                  ),
-                  child: Center(
-                    // İç Çekirdek Buton
-                    child: Container(
-                      width: 125,
-                      height: 125,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: LinearGradient(
-                          colors: _isTransmitting
-                              ? [const Color(0xFFFF2A55), const Color(0xFF990022)]
-                              : [const Color(0xFF1E2730), const Color(0xFF0D1216)],
-                          begin: Alignment.topCenter,
-                          end: Alignment.bottomCenter,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withValues(alpha: 0.6),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
+                  },
+                  child: Container(
+                    width: 175,
+                    height: 175,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: const RadialGradient(
+                        colors: [Color(0xFF222C36), Color(0xFF0C1014)],
+                        radius: 0.9,
                       ),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            _isTransmitting ? Icons.mic : Icons.mic_none_rounded,
-                            color: _isTransmitting ? Colors.white : const Color(0xFF00FF66),
-                            size: 46,
+                      border: Border.all(
+                        color: _isTransmitting
+                            ? const Color(0xFFFF2A55)
+                            : (_isReceiving ? const Color(0xFF00FF66) : const Color(0xFF2A3744)),
+                        width: 3.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: (_isTransmitting ? const Color(0xFFFF2A55) : const Color(0xFF00FF66)).withValues(
+                            alpha: _isTransmitting ? 0.6 : (_isReceiving ? 0.4 : 0.15),
                           ),
-                          const SizedBox(height: 5),
-                          Text(
-                            _isTransmitting
-                                ? 'YAYINDA ($_transmitSeconds s)'
-                                : (_isToggleMode ? 'DOKUN KONUŞ' : 'BAS - KONUŞ'),
-                            style: GoogleFonts.orbitron(
-                              color: _isTransmitting ? Colors.white : const Color(0xFF00FF66),
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1.2,
+                          blurRadius: _isTransmitting ? 32 : 18,
+                          spreadRadius: _isTransmitting ? 4 : 1,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      // İkinci Halka: Yivli Alaşım
+                      child: Container(
+                        width: 140,
+                        height: 140,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: _isTransmitting
+                                ? const Color(0xFFFF2A55).withValues(alpha: 0.5)
+                                : (_isReceiving ? const Color(0xFF00FF66).withValues(alpha: 0.5) : Colors.white12),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Center(
+                          // İç Çekirdek Buton
+                          child: Container(
+                            width: 125,
+                            height: 125,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: LinearGradient(
+                                colors: _isTransmitting
+                                    ? [const Color(0xFFFF2A55), const Color(0xFF990022)]
+                                    : [const Color(0xFF1E2730), const Color(0xFF0D1216)],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.6),
+                                  blurRadius: 8,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  _isTransmitting ? Icons.mic : Icons.mic_none_rounded,
+                                  color: _isTransmitting ? Colors.white : const Color(0xFF00FF66),
+                                  size: 46,
+                                ),
+                                const SizedBox(height: 5),
+                                Text(
+                                  _isTransmitting
+                                      ? 'YAYINDA ($_transmitSeconds s)'
+                                      : (_isToggleMode ? 'DOKUN KONUŞ' : 'BAS - KONUŞ'),
+                                  style: GoogleFonts.orbitron(
+                                    color: _isTransmitting ? Colors.white : const Color(0xFF00FF66),
+                                    fontSize: 10.5,
+                                    fontWeight: FontWeight.w900,
+                                    letterSpacing: 1.2,
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
-                        ],
+                        ),
                       ),
                     ),
                   ),
                 ),
               ),
-            ),
+            ],
           ),
         ),
         const SizedBox(height: 10),

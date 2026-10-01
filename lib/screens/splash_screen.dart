@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' show ImageFilter;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:dio/dio.dart';
@@ -40,7 +40,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
 
   bool _isVip = false;
   bool _isLocalChecked = false;
-  String _userName = '';
   UserModel? _currentUser;
   bool _hasNavigated = false;
   Widget? _resolvedNextScreen;
@@ -112,7 +111,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
         _currentUser = user;
         if (user != null) {
           _isVip = user.isVip || prefVip;
-          _userName = '${user.firstName} ${user.lastName}'.trim();
         } else {
           _isVip = prefVip;
         }
@@ -235,7 +233,6 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
       setState(() {
         _currentUser = user;
         _isVip = isVipActive;
-        _userName = user.fullName;
       });
     }
 
@@ -331,556 +328,348 @@ class _SplashScreenState extends State<SplashScreen> with TickerProviderStateMix
     super.dispose();
   }
 
+  // =========================================================================
+  // 🌟 VIP GİRİŞ EKRANI (BİREBİR GÖRSELDEKİ GİBİ RED CRIMSON & VISIONOS TASARIM)
+  // =========================================================================
   Widget _buildVipSplash() {
-    final hasPhoto = _currentUser?.photoPath != null &&
-        File(_currentUser!.photoPath!).existsSync();
-    final displayName = _userName.isNotEmpty ? _userName : (_currentUser?.fullName ?? 'Yetkili Personel');
-    final jobTitle = _currentUser?.jobTitle.isNotEmpty == true ? _currentUser!.jobTitle : 'İsdemir Saha & Liman Operatörü';
-
     return Scaffold(
-      backgroundColor: const Color(0xFF080A0F),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          // 1. ZEMİN: LÜKS OBSİDİYAN & METALİK GECE IŞIK AMBİYANSI
-          Positioned.fill(
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment(0.0, -0.35),
-                  radius: 1.1,
-                  colors: [
-                    Color(0xFF161E2E),
-                    Color(0xFF0C1017),
-                    Color(0xFF07080C),
-                  ],
+      backgroundColor: const Color(0xFF0A0305),
+      body: GestureDetector(
+        onTap: _proceedToNext,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            // ── 1. EPİK İSDEMİR ENDÜSTRİYEL GÜNBATIMI DUVAR KAĞIDI ──
+            Positioned.fill(
+              child: Image.asset(
+                'assets/images/isdemir_vip_bg.jpg',
+                fit: BoxFit.cover,
+              ),
+            ),
+
+            // Koyu Atmosferik Vignette ve Gradyan Katmanı
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Colors.black.withValues(alpha: 0.30),
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: 0.65),
+                    ],
+                    stops: const [0.0, 0.45, 1.0],
+                  ),
                 ),
               ),
             ),
-          ),
 
-          // Altın ve Şampanya Işıltı Hareleri
-          Positioned(
-            top: -60,
-            right: -40,
-            child: Container(
-              width: 220,
-              height: 220,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFFF59E0B).withValues(alpha: 0.08),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
-                    blurRadius: 90,
-                    spreadRadius: 30,
-                  ),
-                ],
-              ),
-            ),
-          ),
+            // ── 2. ANA İÇERİK: DİKEY HİZALANMIŞ VIP KOKPİT ──
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 16.0),
+                child: Column(
+                  children: [
+                    const SizedBox(height: 24),
 
-          Positioned(
-            bottom: 40,
-            left: -60,
-            child: Container(
-              width: 200,
-              height: 200,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: const Color(0xFF10B981).withValues(alpha: 0.05),
-                boxShadow: [
-                  BoxShadow(
-                    color: const Color(0xFF10B981).withValues(alpha: 0.08),
-                    blurRadius: 80,
-                    spreadRadius: 20,
-                  ),
-                ],
-              ),
-            ),
-          ),
+                    // ── ÜST: İSDEMİR LOGO & VIP GİRİŞ BAŞLIĞI ──
+                    // 1. Resmi Kırmızı İSDEMİR Amblemi
+                    Image.asset(
+                      'assets/images/isdemir_logo_transparent.png',
+                      height: 78,
+                      fit: BoxFit.contain,
+                    ),
+                    const SizedBox(height: 14),
 
-          // 2. ANA İÇERİK: KURUMSAL İSDEMİR VIP PORTAL
-          SafeArea(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return SingleChildScrollView(
-                  physics: const BouncingScrollPhysics(),
-                  padding: const EdgeInsets.symmetric(horizontal: 22.0, vertical: 12.0),
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(minHeight: constraints.maxHeight - 24),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        // ── ÜST KURUMSAL BAŞLIK & AMBLEM ──
-                        Column(
-                          children: [
-                            const SizedBox(height: 6),
-                            // Kurumsal Rozet
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 5),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.04),
-                                borderRadius: BorderRadius.circular(20),
-                                border: Border.all(
-                                  color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
-                                  width: 1,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFFF59E0B).withValues(alpha: 0.1),
-                                    blurRadius: 12,
-                                  ),
-                                ],
-                              ),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(Icons.security_rounded, color: Color(0xFFFBBF24), size: 14),
-                                  const SizedBox(width: 7),
-                                  Text(
-                                    'KURUMSAL VIP PROTOKOLÜ • SEVİYE 4',
-                                    style: GoogleFonts.orbitron(
-                                      color: const Color(0xFFFBBF24),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 1.2,
-                                    ),
-                                  ),
-                                ],
-                              ),
+                    // 2. "İ S D E M İ R   O S"
+                    RichText(
+                      textAlign: TextAlign.center,
+                      text: TextSpan(
+                        children: [
+                          TextSpan(
+                            text: 'İ S D E M İ R ',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white,
+                              fontSize: 23,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 4.5,
                             ),
-                            const SizedBox(height: 12),
-                            // İsdemir Logosu & Yazısı
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
-                              children: [
-                                Container(
-                                  width: 32,
-                                  height: 32,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    gradient: const LinearGradient(
-                                      colors: [Color(0xFFE50914), Color(0xFF990000)],
-                                    ),
-                                    border: Border.all(color: const Color(0xFFFBBF24), width: 1.5),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: const Color(0xFFE50914).withValues(alpha: 0.5),
-                                        blurRadius: 10,
-                                      ),
-                                    ],
-                                  ),
-                                  child: const Center(
-                                    child: Icon(Icons.factory_rounded, color: Colors.white, size: 16),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Text(
-                                  'İSDEMİR',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 24,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                    letterSpacing: 2.5,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    gradient: const LinearGradient(
-                                      colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
-                                    ),
-                                    borderRadius: BorderRadius.circular(6),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: const Color(0xFFF59E0B).withValues(alpha: 0.4),
-                                        blurRadius: 8,
-                                      ),
-                                    ],
-                                  ),
-                                  child: Text(
-                                    'VIP',
-                                    style: GoogleFonts.orbitron(
-                                      fontSize: 13,
-                                      fontWeight: FontWeight.w900,
-                                      color: Colors.black,
-                                      letterSpacing: 1.2,
-                                    ),
-                                  ),
-                                ),
+                          ),
+                          TextSpan(
+                            text: 'O S',
+                            style: GoogleFonts.outfit(
+                              color: const Color(0xFFE50914),
+                              fontSize: 23,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 4.5,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // 3. "———— VIP GİRİŞ ————"
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(width: 44, height: 1, color: Colors.white.withValues(alpha: 0.35)),
+                        const SizedBox(width: 12),
+                        Text(
+                          'VIP GİRİŞ',
+                          style: GoogleFonts.inter(
+                            color: Colors.white.withValues(alpha: 0.95),
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w600,
+                            letterSpacing: 3.5,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Container(width: 44, height: 1, color: Colors.white.withValues(alpha: 0.35)),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+
+                    // 4. "Güvenli Erişim • Yetkili Kullanıcılar İçin"
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          'Güvenli Erişim',
+                          style: GoogleFonts.inter(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                          child: Text(
+                            '•',
+                            style: TextStyle(
+                              color: const Color(0xFFE50914),
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          'Yetkili Kullanıcılar İçin',
+                          style: GoogleFonts.inter(
+                            color: Colors.white.withValues(alpha: 0.8),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w400,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    const Spacer(flex: 3),
+
+                    // ── ORTA: BUZLU CAM VISIONOS KONTROL PANELİ ──
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(28),
+                      child: BackdropFilter(
+                        filter: ImageFilter.blur(sigmaX: 24, sigmaY: 24),
+                        child: Container(
+                          width: double.infinity,
+                          constraints: const BoxConstraints(maxWidth: 330),
+                          padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 28),
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                              colors: [
+                                const Color(0xFF260B12).withValues(alpha: 0.68),
+                                const Color(0xFF100508).withValues(alpha: 0.78),
                               ],
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              'İSKENDERUN DEMİR VE ÇELİK A.Ş. • YÖNETİM PORTALI',
-                              style: GoogleFonts.inter(
-                                fontSize: 9.5,
-                                fontWeight: FontWeight.w600,
-                                color: Colors.white54,
-                                letterSpacing: 1.5,
-                              ),
-                            ),
-                          ],
-                        ),
-
-                        const SizedBox(height: 16),
-
-                        // ── MERKEZ: KURUMSAL YÖNETİCİ KİMLİK KARTI (GLASSMORPHIC) ──
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(22),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFF101520).withValues(alpha: 0.85),
-                            borderRadius: BorderRadius.circular(24),
+                            borderRadius: BorderRadius.circular(28),
                             border: Border.all(
-                              color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
-                              width: 1.2,
+                              color: const Color(0xFFE50914).withValues(alpha: 0.75),
+                              width: 1.5,
                             ),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.black.withValues(alpha: 0.6),
+                                color: const Color(0xFFE50914).withValues(alpha: 0.35),
                                 blurRadius: 30,
-                                offset: const Offset(0, 15),
+                                spreadRadius: 2,
                               ),
                               BoxShadow(
-                                color: const Color(0xFFF59E0B).withValues(alpha: 0.08),
-                                blurRadius: 20,
-                                spreadRadius: 2,
+                                color: Colors.black.withValues(alpha: 0.6),
+                                blurRadius: 24,
+                                offset: const Offset(0, 10),
                               ),
                             ],
                           ),
                           child: Column(
                             mainAxisSize: MainAxisSize.min,
                             children: [
-                              // Avatar ve Doğrulama Halkası
-                              Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Container(
-                                    width: 104,
-                                    height: 104,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: RadialGradient(
-                                        colors: [
-                                          const Color(0xFFF59E0B).withValues(alpha: 0.25),
-                                          Colors.transparent,
-                                        ],
+                              // 1. NEON KIRMIZI DAİRESEL İLERLEME GÖSTERGESİ (CIRCULAR GAUGE)
+                              SizedBox(
+                                width: 132,
+                                height: 132,
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    // Arka Plan Koyu Halka İzi
+                                    SizedBox(
+                                      width: 132,
+                                      height: 132,
+                                      child: CircularProgressIndicator(
+                                        value: 1.0,
+                                        strokeWidth: 5.5,
+                                        valueColor: AlwaysStoppedAnimation<Color>(
+                                          Colors.white.withValues(alpha: 0.08),
+                                        ),
                                       ),
                                     ),
-                                  ),
-                                  Container(
-                                    width: 90,
-                                    height: 90,
-                                    decoration: BoxDecoration(
-                                      shape: BoxShape.circle,
-                                      gradient: const LinearGradient(
-                                        colors: [Color(0xFFFBBF24), Color(0xFFD97706), Color(0xFFB45309)],
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                      ),
-                                      boxShadow: [
-                                        BoxShadow(
-                                          color: const Color(0xFFF59E0B).withValues(alpha: 0.35),
-                                          blurRadius: 20,
-                                          spreadRadius: 3,
+                                    // Ön Plan Canlı Kırmızı İlerleme Yayı
+                                    AnimatedBuilder(
+                                      animation: _progressController,
+                                      builder: (context, _) {
+                                        return SizedBox(
+                                          width: 132,
+                                          height: 132,
+                                          child: CircularProgressIndicator(
+                                            value: _progressController.value,
+                                            strokeWidth: 5.5,
+                                            strokeCap: StrokeCap.round,
+                                            valueColor: const AlwaysStoppedAnimation<Color>(
+                                              Color(0xFFFF2A2A),
+                                            ),
+                                          ),
+                                        );
+                                      },
+                                    ),
+                                    // Merkez Güvenlik Kalkanı & Anahtar Deliği İkonu
+                                    Stack(
+                                      alignment: Alignment.center,
+                                      children: [
+                                        Icon(
+                                          Icons.shield_outlined,
+                                          size: 42,
+                                          color: Colors.white.withValues(alpha: 0.65),
+                                        ),
+                                        Positioned(
+                                          top: 14,
+                                          child: Container(
+                                            width: 5,
+                                            height: 5,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: Colors.white.withValues(alpha: 0.65),
+                                            ),
+                                          ),
+                                        ),
+                                        Positioned(
+                                          top: 18,
+                                          child: Container(
+                                            width: 3.5,
+                                            height: 7,
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withValues(alpha: 0.65),
+                                              borderRadius: BorderRadius.circular(1),
+                                            ),
+                                          ),
                                         ),
                                       ],
                                     ),
-                                    padding: const EdgeInsets.all(3),
-                                    child: ClipOval(
-                                      child: Container(
-                                        color: const Color(0xFF131722),
-                                        child: hasPhoto
-                                            ? Image.file(
-                                                File(_currentUser!.photoPath!),
-                                                fit: BoxFit.cover,
-                                              )
-                                            : const Icon(
-                                                Icons.person_rounded,
-                                                color: Color(0xFFFBBF24),
-                                                size: 52,
-                                              ),
-                                      ),
-                                    ),
-                                  ),
-                                  Positioned(
-                                    bottom: 0,
-                                    right: 4,
-                                    child: Container(
-                                      padding: const EdgeInsets.all(4),
-                                      decoration: const BoxDecoration(
-                                        color: Color(0xFF0F141F),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: Container(
-                                        padding: const EdgeInsets.all(3),
-                                        decoration: const BoxDecoration(
-                                          color: Color(0xFF10B981),
-                                          shape: BoxShape.circle,
-                                        ),
-                                        child: const Icon(
-                                          Icons.verified_rounded,
-                                          color: Colors.white,
-                                          size: 14,
-                                        ),
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                                  ],
+                                ),
                               ),
+                              const SizedBox(height: 22),
 
-                              const SizedBox(height: 16),
-
-                              // İsim Soyisim
+                              // 2. DURUM YAZISI
                               Text(
-                                displayName,
-                                textAlign: TextAlign.center,
-                                style: GoogleFonts.inter(
-                                  fontSize: 21,
-                                  fontWeight: FontWeight.w800,
+                                'Sistem yükleniyor...',
+                                style: GoogleFonts.outfit(
                                   color: Colors.white,
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
                                   letterSpacing: 0.3,
                                 ),
                               ),
-
-                              const SizedBox(height: 6),
-
-                              // Görev / Unvan Rozeti
-                              Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: Colors.white.withValues(alpha: 0.05),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: Colors.white12),
-                                ),
-                                child: Text(
-                                  jobTitle,
-                                  style: GoogleFonts.inter(
-                                    fontSize: 12,
-                                    color: const Color(0xFFFBBF24),
-                                    fontWeight: FontWeight.w600,
-                                  ),
+                              const SizedBox(height: 5),
+                              Text(
+                                'Yetkili erişim doğrulanıyor',
+                                style: GoogleFonts.inter(
+                                  color: const Color(0xFFC0B4BA),
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w400,
                                 ),
                               ),
+                              const SizedBox(height: 24),
 
-                              const SizedBox(height: 16),
+                              // 3. YATAY İLERLEME ÇUBUĞU VE YÜZDE ORANI (% 72)
+                              AnimatedBuilder(
+                                animation: _progressController,
+                                builder: (context, _) {
+                                  final val = _progressController.value;
+                                  final percent = (val * 100).toInt().clamp(0, 100);
 
-                              // İnce Ayırıcı Çizgi
-                              Container(
-                                height: 1,
-                                width: double.infinity,
-                                color: Colors.white.withValues(alpha: 0.08),
-                              ),
-
-                              const SizedBox(height: 14),
-
-                              // 3 Parametre Bilgi Satırı
-                              Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                                children: [
-                                  _buildVipInfoItem('YETKİ', 'VIP LİDER', Icons.stars_rounded, const Color(0xFFFBBF24)),
-                                  Container(width: 1, height: 28, color: Colors.white10),
-                                  _buildVipInfoItem('ŞİFRELEME', 'AES-256 GCM', Icons.lock_outline_rounded, const Color(0xFF60A5FA)),
-                                  Container(width: 1, height: 28, color: Colors.white10),
-                                  _buildVipInfoItem('OTURUM', 'AKTİF DOĞRULAMA', Icons.check_circle_outline_rounded, const Color(0xFF34D399)),
-                                ],
-                              ),
-                            ],
-                          ),
-                        ),
-
-                        const SizedBox(height: 20),
-
-                        // ── ALT: İLERLEME ÇUBUĞU & ANINDA GEÇİŞ BUTONU ──
-                        Column(
-                          children: [
-                            // Canlı İlerleme Göstergesi
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.03),
-                                borderRadius: BorderRadius.circular(18),
-                                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  ClipRRect(
-                                    borderRadius: BorderRadius.circular(6),
-                                    child: Container(
-                                      height: 6,
-                                      width: double.infinity,
-                                      color: const Color(0xFF161B26),
-                                      child: AnimatedBuilder(
-                                        animation: _progressController,
-                                        builder: (context, _) {
-                                          return FractionallySizedBox(
-                                            alignment: Alignment.centerLeft,
-                                            widthFactor: _progressController.value.clamp(0.08, 1.0),
-                                            child: Container(
-                                              decoration: const BoxDecoration(
-                                                gradient: LinearGradient(
-                                                  colors: [
-                                                    Color(0xFFF59E0B),
-                                                    Color(0xFFFBBF24),
-                                                    Color(0xFF10B981),
+                                  return Row(
+                                    children: [
+                                      // Kırmızı Gradyanlı Yatay Çubuk
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius: BorderRadius.circular(4),
+                                          child: Container(
+                                            height: 6,
+                                            color: Colors.white.withValues(alpha: 0.12),
+                                            child: FractionallySizedBox(
+                                              alignment: Alignment.centerLeft,
+                                              widthFactor: val.clamp(0.01, 1.0),
+                                              child: Container(
+                                                decoration: BoxDecoration(
+                                                  gradient: const LinearGradient(
+                                                    colors: [
+                                                      Color(0xFFFF3B30),
+                                                      Color(0xFFE50914),
+                                                    ],
+                                                  ),
+                                                  borderRadius: BorderRadius.circular(4),
+                                                  boxShadow: [
+                                                    BoxShadow(
+                                                      color: const Color(0xFFE50914).withValues(alpha: 0.8),
+                                                      blurRadius: 6,
+                                                    ),
                                                   ],
                                                 ),
                                               ),
                                             ),
-                                          );
-                                        },
-                                      ),
-                                    ),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  AnimatedBuilder(
-                                    animation: _progressController,
-                                    builder: (context, _) {
-                                      final val = _progressController.value;
-                                      final percent = (val * 100).toInt().clamp(0, 100);
-                                      final statusText = val < 0.4
-                                          ? 'VIP Güvenlik Anahtarları Doğrulanıyor...'
-                                          : (val < 0.8
-                                              ? 'Kurumsal Portala Bağlanılıyor...'
-                                              : 'Erişim Onaylandı • Giriş Sağlanıyor');
-
-                                      return Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Row(
-                                            children: [
-                                              const SizedBox(
-                                                width: 12,
-                                                height: 12,
-                                                child: CircularProgressIndicator(
-                                                  strokeWidth: 2,
-                                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFFFBBF24)),
-                                                ),
-                                              ),
-                                              const SizedBox(width: 8),
-                                              Text(
-                                                statusText,
-                                                style: GoogleFonts.inter(
-                                                  fontSize: 11.5,
-                                                  color: Colors.white70,
-                                                  fontWeight: FontWeight.w500,
-                                                ),
-                                              ),
-                                            ],
                                           ),
-                                          Text(
-                                            '%$percent',
-                                            style: GoogleFonts.orbitron(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.bold,
-                                              color: const Color(0xFFFBBF24),
-                                            ),
-                                          ),
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-
-                            const SizedBox(height: 14),
-
-                            // Şık Kurumsal "Sisteme Giriş Yap" Butonu
-                            InkWell(
-                              onTap: () {
-                                HapticFeedback.mediumImpact();
-                                _proceedToNext();
-                              },
-                              borderRadius: BorderRadius.circular(16),
-                              child: Container(
-                                width: double.infinity,
-                                height: 50,
-                                decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
-                                    colors: [Color(0xFFF59E0B), Color(0xFFD97706)],
-                                  ),
-                                  borderRadius: BorderRadius.circular(16),
-                                  boxShadow: [
-                                    BoxShadow(
-                                      color: const Color(0xFFF59E0B).withValues(alpha: 0.3),
-                                      blurRadius: 16,
-                                      offset: const Offset(0, 4),
-                                    ),
-                                  ],
-                                ),
-                                child: Row(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Text(
-                                      'SİSTEME GİRİŞ YAP',
-                                      style: GoogleFonts.orbitron(
-                                        color: Colors.black,
-                                        fontSize: 12.5,
-                                        fontWeight: FontWeight.w900,
-                                        letterSpacing: 1.5,
+                                        ),
                                       ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    const Icon(Icons.arrow_forward_rounded, color: Colors.black, size: 18),
-                                  ],
-                                ),
+                                      const SizedBox(width: 14),
+                                      // Yüzde Metni
+                                      Text(
+                                        '% $percent',
+                                        style: GoogleFonts.inter(
+                                          color: Colors.white,
+                                          fontSize: 13,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                },
                               ),
-                            ),
-
-                            const SizedBox(height: 14),
-
-                            // Kurumsal Alt Bilgi
-                            Text(
-                              '© 2026 İSDEMİR • OYAK Maden Metalürji Grubu • v${AppConfig.currentVersion}.0',
-                              style: GoogleFonts.inter(
-                                fontSize: 10,
-                                color: Colors.white38,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
+                            ],
+                          ),
                         ),
-                      ],
+                      ),
                     ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildVipInfoItem(String label, String value, IconData icon, Color color) {
-    return Column(
-      children: [
-        Icon(icon, color: color, size: 16),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          style: GoogleFonts.orbitron(
-            color: Colors.white38,
-            fontSize: 8.5,
-            fontWeight: FontWeight.w700,
-            letterSpacing: 0.8,
-          ),
+                    const Spacer(flex: 4),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-        const SizedBox(height: 1),
-        Text(
-          value,
-          style: GoogleFonts.inter(
-            color: Colors.white,
-            fontSize: 10.5,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-      ],
+      ),
     );
   }
 

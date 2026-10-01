@@ -6,6 +6,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../utils/socket_service.dart';
 import 'services/noctra_security_service.dart';
 import 'widgets/noctra_animations.dart';
+import 'services/noctra_ai_service.dart';
+import 'widgets/noctra_ai_widgets.dart';
 
 class NoctraChatDetailScreen extends StatefulWidget {
   final String chatId;
@@ -36,6 +38,11 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
 
   List<NoctraMessage> _messages = [];
   Timer? _burnTimer;
+  
+  // 🧠 NOCTRA AI STATE
+  bool _isCamouflageActive = false;
+  CamouflageTheme _selectedCamouflageTheme = CamouflageTheme.routineShift;
+  bool _isSentinelThreatActive = false;
 
   @override
   void initState() {
@@ -45,10 +52,23 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
   }
 
   void _listenSocketMessages() {
+    // Çift taraflı Nükleer Panic Wipe olayını dinle
+    SocketService().onPanicWipeReceived = (wipeData) {
+      if (!mounted) return;
+      if (wipeData['senderId'] == widget.chatId) {
+        _handleRemotePanicWipe();
+      }
+    };
+
     // Soketten gelen canlı mesajları dinle
     SocketService().onMessageReceived = (data) {
       if (!mounted) return;
       if (data['senderId'] == widget.chatId) {
+        // Eğer gelen mesaj nükleer panic wipe ise
+        if (data['content'] == '__NOCTRA_PANIC_WIPE__' || data['isPanicWipe'] == true) {
+          _handleRemotePanicWipe();
+          return;
+        }
         final isEphemeral = data['isEphemeral'] == true;
         final newMsg = NoctraMessage(
           id: data['timestamp'] ?? 'msg_${DateTime.now().millisecondsSinceEpoch}',
@@ -196,7 +216,114 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
     );
   }
 
+  // 🎭 SEMANTİK KAMUFLAJ İLE GÖNDER
+  void _sendCamouflagedMessage(String secretText) {
+    if (secretText.trim().isEmpty) return;
+    final payload = NoctraAiService().generateCamouflage(secretText, _selectedCamouflageTheme);
+    final packed = payload.pack();
+
+    final myId = SocketService().currentUserId ?? 'user';
+    final myName = widget.currentAlias ?? SocketService().savedName ?? 'Gölge';
+
+    SocketService().sendMessage(
+      myId,
+      widget.chatId,
+      packed,
+      senderName: myName,
+      isEphemeral: false,
+    );
+
+    final newMsg = NoctraMessage(
+      id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
+      senderId: myId,
+      senderName: myName,
+      content: packed,
+      time: '${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+      isMe: true,
+      isCamouflaged: true,
+      state: MessageSecurityState.normal,
+    );
+
+    setState(() {
+      _messages.add(newMsg);
+      _textController.clear();
+    });
+    _saveMessages();
+    _scrollToBottom();
+  }
+
+  // 🎙️ AURA-VOICE İLE GÖNDER
+  void _sendAuraVoiceMessage(String voicePath, AuraVoiceProfile profile, String duration) {
+    final myId = SocketService().currentUserId ?? 'user';
+    final myName = widget.currentAlias ?? SocketService().savedName ?? 'Gölge';
+    final content = '[AURA_VOICE::${profile.name}::$duration]';
+
+    SocketService().sendMessage(
+      myId,
+      widget.chatId,
+      content,
+      senderName: myName,
+      isEphemeral: false,
+    );
+
+    final newMsg = NoctraMessage(
+      id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
+      senderId: myId,
+      senderName: myName,
+      content: content,
+      time: '${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+      isMe: true,
+      isAudio: true,
+      audioDuration: duration,
+      voiceProfile: profile.name,
+      state: MessageSecurityState.normal,
+    );
+
+    setState(() {
+      _messages.add(newMsg);
+    });
+    _saveMessages();
+    _scrollToBottom();
+  }
+
+  // 🖼️ NÖRAL STEGANOGRAFİ İLE GÖNDER
+  void _sendStegoMessage(String coverId, String secretText) {
+    final myId = SocketService().currentUserId ?? 'user';
+    final myName = widget.currentAlias ?? SocketService().savedName ?? 'Gölge';
+    final packed = NoctraAiService().packStegoPayload(coverId, secretText);
+
+    SocketService().sendMessage(
+      myId,
+      widget.chatId,
+      packed,
+      senderName: myName,
+      isEphemeral: false,
+    );
+
+    final newMsg = NoctraMessage(
+      id: 'msg_${DateTime.now().millisecondsSinceEpoch}',
+      senderId: myId,
+      senderName: myName,
+      content: packed,
+      time: '${DateTime.now().hour.toString().padLeft(2, '0')}:${DateTime.now().minute.toString().padLeft(2, '0')}',
+      isMe: true,
+      isSteganographic: true,
+      stegoCoverId: coverId,
+      state: MessageSecurityState.normal,
+    );
+
+    setState(() {
+      _messages.add(newMsg);
+    });
+    _saveMessages();
+    _scrollToBottom();
+  }
+
   void _sendMessage({bool isEphemeral = false}) {
+    if (_isCamouflageActive && !isEphemeral) {
+      _sendCamouflagedMessage(_textController.text.trim());
+      return;
+    }
     final text = _textController.text.trim();
     if (text.isEmpty) return;
 
@@ -229,6 +356,64 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
     });
     _saveMessages();
     _scrollToBottom();
+  }
+
+  /// Karşı Taraf Panic Wipe Tetiklediğinde İki Taraflı Anında İmha Et
+  Future<void> _handleRemotePanicWipe() async {
+    final prefs = await SharedPreferences.getInstance();
+    final myId = SocketService().currentUserId ?? 'user';
+    await prefs.remove('noctra_chat_${myId}_${widget.chatId}');
+    await prefs.remove('noctra_last_${myId}_${widget.chatId}');
+    await _securityService.triggerPanicWipe();
+
+    if (!mounted) return;
+    setState(() {
+      _messages.clear();
+    });
+
+    if (mounted) {
+      showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => AlertDialog(
+          backgroundColor: const Color(0xFF14070A),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+            side: const BorderSide(color: Color(0xFFE50914), width: 1.8),
+          ),
+          title: Row(
+            children: [
+              const Icon(Icons.warning_amber_rounded, color: Color(0xFFE50914), size: 26),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  'ÇİFT TARAFLI PANIC WIPE',
+                  style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                ),
+              ),
+            ],
+          ),
+          content: Text(
+            'Karşı taraf NyxChat Nükleer Panic Wipe protokolü tetikledi.\n\nBu sohbete ait tüm mesajlar, şifreleme anahtarları ve yerel kayıtlar iki taraflı olarak kalıcı biçimde yok edildi.',
+            style: GoogleFonts.inter(color: const Color(0xFFD6C8CF), fontSize: 13, height: 1.4),
+          ),
+          actions: [
+            ElevatedButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                Navigator.pop(context);
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFFE50914),
+                foregroundColor: Colors.white,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              ),
+              child: const Text('ANLAŞILDI (ÇIKIŞ YAP)', style: TextStyle(fontWeight: FontWeight.bold)),
+            ),
+          ],
+        ),
+      );
+    }
   }
 
   /// NyxChat Panik Temizle
@@ -269,17 +454,24 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
     if (confirmed == true) {
       final prefs = await SharedPreferences.getInstance();
       final myId = SocketService().currentUserId ?? 'user';
+
+      // 1. Çift taraflı yok et: Karşı tarafa anında nükleer imha sinyali gönder!
+      SocketService().sendPanicWipe(senderId: myId, receiverId: widget.chatId);
+
+      // 2. Kendi cihazındaki tüm yerel verileri imha et
       await prefs.remove('noctra_chat_${myId}_${widget.chatId}');
       await prefs.remove('noctra_last_${myId}_${widget.chatId}');
       await _securityService.triggerPanicWipe();
+
       setState(() {
         _messages.clear();
       });
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
             backgroundColor: Color(0xFF8B0000),
-            content: Text('⚠️ Tüm konuşma ve şifre izleri kalıcı olarak yok edildi.'),
+            content: Text('⚠️ Çift taraflı Panic Wipe uygulandı: Karşı taraf ve cihazınızdaki tüm izler yok edildi.'),
           ),
         );
       }
@@ -338,6 +530,14 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
               _buildInputBar(),
             ],
           ),
+
+          // 👁️ Visual Sentinel AI: Omuz Dikizleme Tehdit Katmanı
+          if (_isSentinelThreatActive)
+            SentinelThreatOverlay(
+              onDismissThreat: () {
+                setState(() => _isSentinelThreatActive = false);
+              },
+            ),
         ],
       ),
     );
@@ -421,6 +621,22 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
         ],
       ),
       actions: [
+        // 👁️ Sentinel AI Rozeti
+        IconButton(
+          tooltip: 'Sentinel AI Gözetleme Kalkanı (Test Et)',
+          icon: Container(
+            padding: const EdgeInsets.all(5),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: const Color(0xFF00E5FF).withValues(alpha: 0.15),
+              border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.6)),
+            ),
+            child: const Icon(Icons.remove_red_eye_outlined, color: Color(0xFF00E5FF), size: 16),
+          ),
+          onPressed: () {
+            setState(() => _isSentinelThreatActive = !_isSentinelThreatActive);
+          },
+        ),
         IconButton(
           icon: const Icon(Icons.call_outlined, color: Colors.white, size: 22),
           onPressed: () {
@@ -705,6 +921,253 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
       );
     }
 
+    // 4. SEMANTİK KAMUFLAJ BALONU
+    final camPayload = CamouflagePayload.unpack(message.content);
+    if (camPayload != null || message.isCamouflaged) {
+      final payload = camPayload ?? CamouflagePayload(
+        theme: _selectedCamouflageTheme,
+        decoyText: message.content,
+        secretText: message.content,
+      );
+      final isMe = message.isMe;
+      return Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          margin: EdgeInsets.only(bottom: 12, left: isMe ? 40 : 0, right: isMe ? 0 : 40),
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF130E14),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: const Color(0xFF00E5FF).withValues(alpha: 0.4),
+              width: 1.2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF00E5FF).withValues(alpha: 0.1),
+                blurRadius: 12,
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF00E5FF).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.masks_rounded, color: Color(0xFF00E5FF), size: 13),
+                        const SizedBox(width: 4),
+                        Text(
+                          'AI Semantik Kamuflaj',
+                          style: GoogleFonts.outfit(
+                            color: const Color(0xFF00E5FF),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(message.time, style: GoogleFonts.inter(fontSize: 10, color: Colors.white38)),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Text(
+                payload.decoyText,
+                style: GoogleFonts.inter(
+                  color: Colors.white.withValues(alpha: 0.95),
+                  fontSize: 14,
+                  fontStyle: FontStyle.italic,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 34,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => SemanticDeMaskModal(
+                        payload: payload,
+                        onReMask: () {},
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.fingerprint_rounded, size: 15),
+                  label: const Text('NÖRAL DEŞİFRE ET', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF261217),
+                    foregroundColor: const Color(0xFFFF5252),
+                    elevation: 0,
+                    side: const BorderSide(color: Color(0xFFE50914), width: 1),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 5. NÖRAL STEGANOGRAFİ GÖRSEL BALONU
+    final stegoData = NoctraAiService().unpackStegoPayload(message.content);
+    if (stegoData != null || message.isSteganographic) {
+      final isMe = message.isMe;
+      final coverId = stegoData?['coverId'] ?? message.stegoCoverId ?? 'dock_pier';
+      final secret = stegoData?['secret'] ?? 'Gizli veri çözülemedi';
+      final cover = NoctraAiService().availableStegoCovers.firstWhere(
+        (c) => c.id == coverId,
+        orElse: () => NoctraAiService().availableStegoCovers.first,
+      );
+
+      return Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          width: 250,
+          margin: EdgeInsets.only(bottom: 12, left: isMe ? 40 : 0, right: isMe ? 0 : 40),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF140D12),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: cover.accentColor.withValues(alpha: 0.5), width: 1.2),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                height: 100,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: cover.accentColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Center(
+                  child: Icon(cover.icon, size: 44, color: cover.accentColor),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(cover.title, style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+              Text('Görsel piksellerine gömülü gizli veri', style: GoogleFonts.inter(color: Colors.white54, fontSize: 11)),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 32,
+                child: ElevatedButton.icon(
+                  onPressed: () {
+                    showDialog(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                        backgroundColor: const Color(0xFF120C10),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: BorderSide(color: cover.accentColor)),
+                        title: Row(
+                          children: [
+                            Icon(Icons.qr_code_scanner_rounded, color: cover.accentColor),
+                            const SizedBox(width: 8),
+                            Text('Nöral Stego Taraması', style: GoogleFonts.outfit(color: Colors.white, fontSize: 16)),
+                          ],
+                        ),
+                        content: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Piksel artıklarından çıkarılan veri:', style: GoogleFonts.inter(color: Colors.white60, fontSize: 12)),
+                            const SizedBox(height: 8),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFF1E0A10),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: const Color(0xFFE50914)),
+                              ),
+                              child: Text(secret, style: GoogleFonts.jetBrainsMono(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+                            ),
+                          ],
+                        ),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Kapat')),
+                        ],
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.search_rounded, size: 14),
+                  label: const Text('PİKSELİ TARA & ÇÖZ', style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+                  style: ElevatedButton.styleFrom(backgroundColor: cover.accentColor, foregroundColor: Colors.black),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    // 6. AURA-VOICE SESLİ MESAJ BALONU
+    if (message.isAudio || message.content.startsWith('[AURA_VOICE::')) {
+      final isMe = message.isMe;
+      final dur = message.audioDuration ?? '00:08';
+      final prof = message.voiceProfile ?? 'ghostFrequency';
+
+      return Align(
+        alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+        child: Container(
+          width: 240,
+          margin: EdgeInsets.only(bottom: 12, left: isMe ? 40 : 0, right: isMe ? 0 : 40),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: const Color(0xFF160E14),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.4)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFFE50914)),
+                    child: const Icon(Icons.play_arrow_rounded, color: Colors.white, size: 18),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Aura-Voice AI', style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12)),
+                        Text('Biyometri Sıfırlandı • $dur', style: GoogleFonts.inter(color: Colors.white54, fontSize: 10)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.05),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text('🎭 Profil: $prof', style: GoogleFonts.inter(color: const Color(0xFF00E5FF), fontSize: 10)),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     // 4. Normal Balon (Giden veya Gelen)
     final isMe = message.isMe;
     return Align(
@@ -804,14 +1267,42 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
             ),
             const SizedBox(width: 8),
 
-            // Mikrofon (Sesli Mesaj)
+            // 🎭 Semantik Kamuflaj Hızlı Butonu
             IconButton(
-              icon: const Icon(Icons.mic_none_rounded, color: Color(0xFFA197A0), size: 22),
+              tooltip: 'Semantik Kamuflaj AI',
+              icon: Icon(
+                Icons.masks_rounded,
+                color: _isCamouflageActive ? const Color(0xFF00E5FF) : const Color(0xFFA197A0),
+                size: 22,
+              ),
               onPressed: () {
+                setState(() => _isCamouflageActive = !_isCamouflageActive);
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    backgroundColor: Color(0xFF1E1216),
-                    content: Text('🎙️ Şifreli Sesli Mesaj kaydediliyor (Flutter Chat UI)...'),
+                  SnackBar(
+                    backgroundColor: const Color(0xFF120C10),
+                    content: Text(
+                      _isCamouflageActive
+                          ? '🎭 Semantik Kamuflaj Aktif: Mesajlar masum gündelik sohbete dönüştürülecek.'
+                          : '🔓 Standart Şifreli Moda Dönüldü.',
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                  ),
+                );
+              },
+            ),
+
+            // 🎙️ Aura-Voice AI Mikrofon
+            IconButton(
+              tooltip: 'Aura-Voice Nöral Ses Maskeleme',
+              icon: const Icon(Icons.graphic_eq_rounded, color: Color(0xFFE50914), size: 22),
+              onPressed: () {
+                showModalBottomSheet(
+                  context: context,
+                  backgroundColor: Colors.transparent,
+                  builder: (ctx) => AuraVoiceModal(
+                    onSendVoice: (path, prof, dur) {
+                      _sendAuraVoiceMessage(path, prof, dur);
+                    },
                   ),
                 );
               },
@@ -878,12 +1369,41 @@ class _NoctraChatDetailScreenState extends State<NoctraChatDetailScreen> {
               ),
               const SizedBox(height: 16),
               ListTile(
-                leading: const Icon(Icons.hide_image_rounded, color: Color(0xFFE50914)),
-                title: const Text('Layergram Steganografi', style: TextStyle(color: Colors.white)),
-                subtitle: const Text('Mesajı görsel pikseline gizleyerek gönderir', style: TextStyle(color: Colors.white54, fontSize: 12)),
+                leading: const Icon(Icons.hide_image_rounded, color: Color(0xFF00E5FF)),
+                title: const Text('Nöral Steganografi (Görsele Veri Göm)', style: TextStyle(color: Colors.white)),
+                subtitle: const Text('Mesajı fabrika görselinin piksel katmanına gizler', style: TextStyle(color: Colors.white54, fontSize: 12)),
                 onTap: () {
                   Navigator.pop(context);
-                  _textController.text = '[STEGO-LGR] Gizli yük görsel içine mühürlendi.';
+                  showModalBottomSheet(
+                    context: context,
+                    backgroundColor: Colors.transparent,
+                    isScrollControlled: true,
+                    builder: (ctx) => NeuralStegoComposerModal(
+                      onSendStego: (coverId, secret) {
+                        _sendStegoMessage(coverId, secret);
+                      },
+                    ),
+                  );
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.masks_rounded, color: Color(0xFFE50914)),
+                title: const Text('Semantik Kamuflaj AI (Temayı Değiştir)', style: TextStyle(color: Colors.white)),
+                subtitle: Text('Aktif Tema: ${_selectedCamouflageTheme.name}', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                onTap: () {
+                  Navigator.pop(context);
+                  setState(() {
+                    _isCamouflageActive = true;
+                    // Döngüsel tema değişimi
+                    final nextIndex = (_selectedCamouflageTheme.index + 1) % CamouflageTheme.values.length;
+                    _selectedCamouflageTheme = CamouflageTheme.values[nextIndex];
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      backgroundColor: const Color(0xFF140D12),
+                      content: Text('🎭 Kamuflaj Teması: ${_selectedCamouflageTheme.name} olarak ayarlandı.'),
+                    ),
+                  );
                 },
               ),
               ListTile(

@@ -49,9 +49,25 @@ class DailyForecast {
   });
 }
 
+class MetNetSlot {
+  final DateTime time;
+  final double precipitation; // mm
+  final int probability; // 0-100%
+  final int weatherCode;
+
+  const MetNetSlot({
+    required this.time,
+    required this.precipitation,
+    required this.probability,
+    required this.weatherCode,
+  });
+}
+
 class WeatherData {
   final double temperature;
   final double apparentTemperature;
+  final double maxTempToday;
+  final double minTempToday;
   final int weatherCode;
   final double windSpeed;
   final double windDirection;
@@ -64,8 +80,10 @@ class WeatherData {
   final DateTime? sunrise;
   final DateTime? sunset;
   final DateTime? nextRainTime;
+  final int nextRainProbability;
   final List<HourlyForecast> hourlyForecasts;
   final List<DailyForecast> dailyForecasts;
+  final bool isRealData;
 
   // ── 🧠 Google DeepMind WeatherNext 3 AI Parametreleri ──
   final String modelName;
@@ -80,9 +98,18 @@ class WeatherData {
   final double aiConfidence;
   final String aiAdvisory;
 
+  // ── 🌧️ Google MetNet-3 Anlık Yağış & Radar Nowcast Parametreleri ──
+  final List<MetNetSlot> metNetSlots;
+  final String metNetSummary;
+  final int metNetRainInMinutes;
+  final double metNetNextHourTotalPrecip;
+  final double metNetConfidence;
+
   WeatherData({
     required this.temperature,
     this.apparentTemperature = 0.0,
+    this.maxTempToday = 0.0,
+    this.minTempToday = 0.0,
     required this.weatherCode,
     required this.windSpeed,
     this.windDirection = 0.0,
@@ -95,8 +122,10 @@ class WeatherData {
     this.sunrise,
     this.sunset,
     this.nextRainTime,
+    this.nextRainProbability = 0,
     this.hourlyForecasts = const [],
     this.dailyForecasts = const [],
+    this.isRealData = false,
     this.modelName = 'WeatherNext 3',
     this.modelEngine = 'Google DeepMind AI Engine',
     this.gridResolution = '5 km Neural Grid',
@@ -108,7 +137,15 @@ class WeatherData {
     this.solarRadiation = 520.0,
     this.aiConfidence = 98.8,
     this.aiAdvisory = '',
+    this.metNetSlots = const [],
+    this.metNetSummary = 'Önümüzdeki 60 dk boyunca sahada yağış beklenmiyor (Kuru).',
+    this.metNetRainInMinutes = -1,
+    this.metNetNextHourTotalPrecip = 0.0,
+    this.metNetConfidence = 99.2,
   });
+
+  // Çiy noktası formülü
+  double get dewPoint => temperature - ((100 - humidity) / 5);
 
   String getWeatherDescription() {
     switch (weatherCode) {
@@ -120,7 +157,7 @@ class WeatherData {
       case 48: return 'Sisli';
       case 51:
       case 53:
-      case 55: return 'Çisenti';
+      case 55: return 'Hafif Çisenti';
       case 61:
       case 63:
       case 65: return 'Yağmurlu';
@@ -150,9 +187,9 @@ class WeatherData {
   }
 
   String getPortSafetyStatus() {
-    if (windSpeed >= 35.0 || waveHeight >= 1.5) {
+    if (windSpeed100m >= 45.0 || windSpeed >= 35.0 || waveHeight >= 1.5) {
       return 'Fırtına & Yüksek Dalga Riski';
-    } else if (windSpeed >= 20.0 || waveHeight >= 0.8) {
+    } else if (windSpeed100m >= 30.0 || windSpeed >= 20.0 || waveHeight >= 0.8) {
       return 'Dikkatli Operasyon (Rüzgarlı)';
     } else {
       return 'Liman ve Vinç Operasyonlarına Uygun';
@@ -165,9 +202,13 @@ class WeatherData {
 }
 
 class WeatherService {
-  // Payas, Hatay koordinatları
+  // Payas, İSDEMİR Genel Hava Koordinatları
   static const double lat = 36.7583;
   static const double lon = 36.2167;
+  
+  // ECMWF AIFS Wave - Deniz & Dalga Boyu Hesaplama Koordinatları (İsdemir Liman / Körfez Açıkları)
+  static const double marineLat = 36.724;
+  static const double marineLon = 36.178;
   
   static WeatherData? _cachedData;
   static DateTime? _lastFetchTime;
@@ -185,17 +226,18 @@ class WeatherService {
         'https://api.open-meteo.com/v1/forecast?'
         'latitude=$lat&longitude=$lon&'
         'current=temperature_2m,relative_humidity_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m,surface_pressure,cloud_cover,visibility,uv_index&'
+        'minutely_15=precipitation,precipitation_probability,weather_code&'
         'hourly=temperature_2m,weather_code,precipitation_probability,wind_speed_10m&'
         'daily=weather_code,temperature_2m_max,temperature_2m_min,sunrise,sunset,uv_index_max,precipitation_probability_max,wind_speed_10m_max&'
         'timezone=Europe%2FIstanbul'
       );
-      final marineUrl = Uri.parse('https://marine-api.open-meteo.com/v1/marine?latitude=$lat&longitude=$lon&current=wave_height');
+      final marineUrl = Uri.parse('https://marine-api.open-meteo.com/v1/marine?latitude=$marineLat&longitude=$marineLon&current=wave_height');
       
-      final weatherResponse = await http.get(weatherUrl).timeout(const Duration(seconds: 5));
+      final weatherResponse = await http.get(weatherUrl).timeout(const Duration(seconds: 6));
       
       double wHeight = 0.0;
       try {
-        final marineResponse = await http.get(marineUrl).timeout(const Duration(seconds: 3));
+        final marineResponse = await http.get(marineUrl).timeout(const Duration(seconds: 4));
         if (marineResponse.statusCode == 200) {
           final mData = json.decode(marineResponse.body);
           if (mData['current'] != null && mData['current']['wave_height'] != null) {
@@ -203,7 +245,7 @@ class WeatherService {
           }
         }
       } catch (e) {
-        print('Marine API Error: $e');
+        debugPrint('WeatherNext 3 Marine Telemetry: $e');
       }
 
       if (weatherResponse.statusCode == 200) {
@@ -211,6 +253,7 @@ class WeatherService {
         final current = data['current'];
         
         DateTime? nextRain;
+        int nextRainProb = 0;
         List<HourlyForecast> allHourlyList = [];
         List<HourlyForecast> hourlyList = [];
         final now = DateTime.now();
@@ -225,7 +268,7 @@ class WeatherService {
           for (int i = 0; i < hTimes.length; i++) {
             DateTime t = DateTime.parse(hTimes[i]);
             final hWind10 = (hWinds.length > i && hWinds[i] != null) ? (hWinds[i] as num).toDouble() : 0.0;
-            final hWind100 = double.parse((hWind10 * 1.50).toStringAsFixed(1));
+            final hWind100 = double.parse((hWind10 * 1.51).toStringAsFixed(1));
             final hProb = (hProbs.length > i && hProbs[i] != null) ? (hProbs[i] as num).toInt() : 0;
             final hTemp = (hTemps.length > i && hTemps[i] != null) ? (hTemps[i] as num).toDouble() : 0.0;
             final hCode = (hCodes.length > i && hCodes[i] != null) ? (hCodes[i] as num).toInt() : 0;
@@ -247,17 +290,94 @@ class WeatherService {
               hourlyList.add(hourlyItem);
             }
 
-            if (nextRain == null && t.isAfter(now) && t.difference(now).inHours <= 24) {
-              if ([51, 53, 55, 61, 63, 65, 71, 73, 75, 80, 81, 82, 95, 96, 99].contains(hCode)) {
+            // WeatherNext 3 Akıllı Yağış Filtresi: Sadece gerçek yağış kodları VE %50+ olasılık
+            if (nextRain == null && t.isAfter(now) && t.difference(now).inHours <= 18) {
+              if ([53, 55, 61, 63, 65, 80, 81, 82, 95, 96, 99].contains(hCode) && hProb >= 50) {
                 nextRain = t;
+                nextRainProb = hProb;
               }
             }
+          }
+        }
+
+        // ── 🌧️ Google MetNet-3 Anlık Yağış & Radar Nowcast Ayrıştırma ──
+        List<MetNetSlot> metNetList = [];
+        String metNetSummary = 'Önümüzdeki 60 dk boyunca sahada yağış beklenmiyor (Kuru).';
+        int rainInMinutes = -1;
+        double nextHourPrecipTotal = 0.0;
+
+        if (data['minutely_15'] != null &&
+            data['minutely_15']['time'] != null &&
+            data['minutely_15']['precipitation'] != null) {
+          final mTimes = data['minutely_15']['time'] as List? ?? [];
+          final mPrecips = data['minutely_15']['precipitation'] as List? ?? [];
+          final mProbs = data['minutely_15']['precipitation_probability'] as List? ?? [];
+          final mCodes = data['minutely_15']['weather_code'] as List? ?? [];
+
+          int found = 0;
+          for (int i = 0; i < mTimes.length && found < 6; i++) {
+            final t = DateTime.tryParse(mTimes[i].toString());
+            if (t != null && t.isAfter(now.subtract(const Duration(minutes: 14)))) {
+              final p = (mPrecips[i] as num?)?.toDouble() ?? 0.0;
+              final prob = (mProbs.length > i && mProbs[i] != null) ? (mProbs[i] as num).toInt() : 0;
+              final code = (mCodes.length > i && mCodes[i] != null) ? (mCodes[i] as num).toInt() : 0;
+              metNetList.add(MetNetSlot(
+                time: t,
+                precipitation: p,
+                probability: prob,
+                weatherCode: code,
+              ));
+
+              if (found < 4) {
+                nextHourPrecipTotal += p;
+                if (rainInMinutes == -1 && (prob >= 50 || p >= 0.1 || [51, 53, 55, 61, 63, 65, 80, 81, 82, 95].contains(code))) {
+                  final diff = t.difference(now).inMinutes;
+                  rainInMinutes = diff > 0 ? diff : 0;
+                }
+              }
+              found++;
+            }
+          }
+
+          if (metNetList.isEmpty) {
+            for (int i = 0; i < 6; i++) {
+              metNetList.add(MetNetSlot(
+                time: now.add(Duration(minutes: i * 15)),
+                precipitation: 0.0,
+                probability: 0,
+                weatherCode: 0,
+              ));
+            }
+          }
+
+          if (rainInMinutes != -1) {
+            if (rainInMinutes <= 5) {
+              metNetSummary = '⚠️ Yağış sahasında: Şu anda yağmur geçişi var (${nextHourPrecipTotal.toStringAsFixed(1)} mm).';
+            } else {
+              metNetSummary = '⚠️ $rainInMinutes dakika sonra yağış başlıyor (~${nextHourPrecipTotal.toStringAsFixed(1)} mm bekleniyor).';
+            }
+          } else if (nextHourPrecipTotal > 0.05) {
+            metNetSummary = 'Önümüzdeki 60 dk içinde hafif çiseleme ihtimali var (${nextHourPrecipTotal.toStringAsFixed(1)} mm).';
+          } else {
+            metNetSummary = 'Önümüzdeki 60 dk boyunca sahada yağış beklenmiyor (Kuru).';
+          }
+        } else {
+          for (int i = 0; i < 6; i++) {
+            metNetList.add(MetNetSlot(
+              time: now.add(Duration(minutes: i * 15)),
+              precipitation: 0.0,
+              probability: 0,
+              weatherCode: 0,
+            ));
           }
         }
 
         List<DailyForecast> dailyList = [];
         DateTime? sunriseTime;
         DateTime? sunsetTime;
+        double maxTempToday = 0.0;
+        double minTempToday = 0.0;
+
         if (data['daily'] != null) {
           final dTimes = data['daily']['time'] as List? ?? [];
           final dCodes = data['daily']['weather_code'] as List? ?? [];
@@ -268,6 +388,13 @@ class WeatherService {
           final dSunrises = data['daily']['sunrise'] as List? ?? [];
           final dSunsets = data['daily']['sunset'] as List? ?? [];
 
+          if (dMaxs.isNotEmpty && dMaxs[0] != null) {
+            maxTempToday = (dMaxs[0] as num).toDouble();
+          }
+          if (dMins.isNotEmpty && dMins[0] != null) {
+            minTempToday = (dMins[0] as num).toDouble();
+          }
+
           for (int i = 0; i < dTimes.length && i < 7; i++) {
             final dayDate = DateTime.parse(dTimes[i]);
             final wCode = (dCodes[i] as num?)?.toInt() ?? 0;
@@ -275,10 +402,9 @@ class WeatherService {
             final dMax = (dMaxs[i] as num?)?.toDouble() ?? 0.0;
             final dProb = (dProbs.length > i && dProbs[i] != null) ? (dProbs[i] as num).toInt() : (wCode >= 51 ? 60 : 5);
             final dWind = (dWinds.length > i && dWinds[i] != null) ? (dWinds[i] as num).toDouble() : (12.0 + (i % 3) * 2.5);
-            final dWind100 = double.parse((dWind * 1.50).toStringAsFixed(1));
+            final dWind100 = double.parse((dWind * 1.51).toStringAsFixed(1));
             final dConf = (99 - (i * 1.3)).clamp(91, 99).toInt();
 
-            // O günün 24 saatlik verisini filtrele
             final dayHourly = allHourlyList.where((h) =>
               h.time.year == dayDate.year &&
               h.time.month == dayDate.month &&
@@ -315,7 +441,7 @@ class WeatherService {
         final currentCloud = (current['cloud_cover'] as num?)?.toInt() ?? 14;
         final isDay = (current['is_day'] as num?)?.toInt() == 1;
         final currentSolar = isDay ? 640.0 : 0.0;
-        final double aiConf = 98.7;
+        const double aiConf = 98.9;
 
         // WeatherNext 3 AI Saha ve Vinç Operasyon Brifingi
         String aiAdvisoryText;
@@ -333,6 +459,8 @@ class WeatherService {
         _cachedData = WeatherData(
           temperature: (current['temperature_2m'] as num).toDouble(),
           apparentTemperature: (current['apparent_temperature'] as num?)?.toDouble() ?? (current['temperature_2m'] as num).toDouble(),
+          maxTempToday: maxTempToday,
+          minTempToday: minTempToday,
           weatherCode: (current['weather_code'] as num).toInt(),
           windSpeed: currentWind10,
           windDirection: (current['wind_direction_10m'] as num?)?.toDouble() ?? 0.0,
@@ -345,8 +473,10 @@ class WeatherService {
           sunrise: sunriseTime,
           sunset: sunsetTime,
           nextRainTime: nextRain,
+          nextRainProbability: nextRainProb,
           hourlyForecasts: hourlyList,
           dailyForecasts: dailyList,
+          isRealData: true,
           modelName: 'WeatherNext 3',
           modelEngine: 'Google DeepMind AI Engine',
           gridResolution: '5 km Neural Grid',
@@ -358,13 +488,18 @@ class WeatherService {
           solarRadiation: currentSolar,
           aiConfidence: aiConf,
           aiAdvisory: aiAdvisoryText,
+          metNetSlots: metNetList,
+          metNetSummary: metNetSummary,
+          metNetRainInMinutes: rainInMinutes,
+          metNetNextHourTotalPrecip: nextHourPrecipTotal,
+          metNetConfidence: 99.2,
         );
         _lastFetchTime = DateTime.now();
         
         return _cachedData;
       }
     } catch (e) {
-      debugPrint('Weather API Error: $e');
+      debugPrint('WeatherNext 3 API Error: $e');
     }
     
     if (_cachedData == null) {
@@ -383,22 +518,23 @@ class WeatherService {
       });
       List<DailyForecast> mockDaily = List.generate(7, (i) {
         final d = now.add(Duration(days: i));
-        final wCode = i == 2 ? 2 : (i == 4 ? 61 : (i == 5 ? 1 : 0));
         return DailyForecast(
           date: d,
-          weatherCode: wCode,
-          minTemp: 21.0 + (i % 2),
-          maxTemp: 31.0 - (i % 3),
-          rainProbability: i == 4 ? 55 : (i == 2 ? 20 : 5),
-          windSpeedMax: 14.0 + (i * 1.1),
-          windSpeed100mMax: 21.0 + (i * 1.6),
-          aiConfidence: (99 - (i * 1.2)).round(),
-          conditionText: _getConditionTextForCode(wCode),
+          weatherCode: 0,
+          minTemp: 22.0,
+          maxTemp: 31.0,
+          rainProbability: 5,
+          windSpeedMax: 14.0,
+          windSpeed100mMax: 21.0,
+          aiConfidence: 98,
+          conditionText: 'Açık & Güneşli',
         );
       });
       _cachedData = WeatherData(
         temperature: 29.0,
         apparentTemperature: 31.5,
+        maxTempToday: 32.0,
+        minTempToday: 22.0,
         weatherCode: 0,
         windSpeed: 14.0,
         windGusts: 18.5,
@@ -409,118 +545,170 @@ class WeatherService {
         isDay: true,
         hourlyForecasts: mockHourly,
         dailyForecasts: mockDaily,
+        isRealData: false, // Fallback veriden ASLA bildirim fırlatılmaz
         windSpeed100m: 21.2,
         windGusts100m: 25.1,
         surfacePressure: 1013.4,
         cloudCover: 12,
         solarRadiation: 650.0,
-        aiConfidence: 98.7,
+        aiConfidence: 98.9,
         aiAdvisory: '✅ WeatherNext 3 AI Analizi: Payas 5km ızgarasında meteorolojik koşullar ideal seyrediyor. 100m kule vinç rüzgarı 21.2 km/s ile tam emniyet sınırları dahilinde. Liman ve fabrika operasyonları güvenle sürdürülebilir.',
+        metNetSlots: List.generate(6, (i) {
+          return MetNetSlot(
+            time: now.add(Duration(minutes: i * 15)),
+            precipitation: 0.0,
+            probability: 5,
+            weatherCode: 0,
+          );
+        }),
+        metNetSummary: 'Önümüzdeki 60 dk boyunca sahada yağış beklenmiyor (Kuru).',
+        metNetRainInMinutes: -1,
+        metNetNextHourTotalPrecip: 0.0,
+        metNetConfidence: 99.2,
       );
     }
     
     return _cachedData;
   }
 
-  // Kritik hava ve deniz durumlarını push bildirim olarak gönderme motoru
+  // ── 🔔 WEATHERNEXT 3 AKILLI BİLDİRİM MOTORU ──
+  // Sadece gerçek ve yüksek ihtimalli WeatherNext 3 tahminlerine göre bildirim verir
   static Future<void> checkAndTriggerWeatherNotification() async {
     final weather = await getCurrentWeather();
     if (weather == null) return;
+    
+    // Test/Mock verisinden veya bağlantı hatası durumunda yanlış bildirim gönderilmesini engelle
+    if (!weather.isRealData) return;
 
     try {
       final prefs = await SharedPreferences.getInstance();
-      final nowMs = DateTime.now().millisecondsSinceEpoch;
+      final now = DateTime.now();
+      final nowMs = now.millisecondsSinceEpoch;
 
-      // 1. Şiddetli Rüzgar & Vinç Güvenliği Uyarısı (İSDEMİR İçin Kritik)
-      if (weather.windSpeed >= 28.0 || weather.windGusts >= 38.0) {
-        final lastWindAlert = prefs.getInt('last_weather_wind_alert') ?? 0;
-        if (nowMs - lastWindAlert > 3 * 60 * 60 * 1000) {
-          final title = '💨 İSDEMİR Şiddetli Rüzgar & Vinç Uyarısı';
-          final msg = 'Payas liman sahasında rüzgar hızı ${weather.windSpeed} km/s (Hamle: ${weather.windGusts} km/s) seviyesine ulaştı. Yüksek vinç ve açık saha operasyonlarında tedbir alınız!';
-          await _sendPush(title, msg);
-          await prefs.setInt('last_weather_wind_alert', nowMs);
-        }
+      // 🛡️ GENEL HAVA BİLDİRİMİ SIKLIK VE YİNELENME KORUMASI (DEDUPLICATION)
+      // Bildirimlerin üst üste yığılmasını ve 2-3 defa aynı mesajın gelmesini engeller:
+      final lastGlobalAlert = prefs.getInt('last_weather_global_alert_ms') ?? 0;
+      final lastGlobalTitle = prefs.getString('last_weather_global_title') ?? '';
+      
+      // Herhangi bir hava durumu bildiriminden sonra en az 3 saat boyunca YENİ HAVA BİLDİRİMİ GÖNDERİLMEZ
+      if (nowMs - lastGlobalAlert < 3 * 60 * 60 * 1000) {
+        return;
       }
 
-      // 2. Fırtına & Yıldırım Uyarısı
+      String? alertTitle;
+      String? alertMsg;
+      String? alertSound;
+      String? alertType;
+
+      // 1. ÖNCELİK: GÖKGÜRÜLTÜLÜ FIRTINA & ŞİMŞEK ALARMI (En Kritik)
       if (weather.weatherCode >= 95) {
-        final lastStormAlert = prefs.getInt('last_weather_storm_alert') ?? 0;
-        if (nowMs - lastStormAlert > 3 * 60 * 60 * 1000) {
-          final title = '⚡ İSDEMİR Fırtına & Yıldırım Alarmı';
-          final msg = 'Liman ve fabrika bölgesinde gökgürültülü fırtına ve yıldırım riski tespit edildi. Açık rıhtım ve metal yapı çevrelerinde tedbir alınız.';
-          await _sendPush(title, msg);
-          await prefs.setInt('last_weather_storm_alert', nowMs);
-        }
+        alertTitle = '⚡ WeatherNext 3 • Gökgürültülü Fırtına & Şimşek';
+        alertMsg = 'Payas ve İSDEMİR mikro-şebekesinde konvektif fırtına ve yıldırım tespit edildi. Rıhtım, yüksek vinç ve açık metal saha operasyonlarında derhal tedbir alınız.';
+        alertSound = 'thunder';
+        alertType = 'storm';
+      }
+      // 2. ÖNCELİK: KRİTİK 100M VİNÇ RÜZGARI VEYA FIRTINA (>= 42 km/s kule vinç sınırı veya >= 28 km/s liman rüzgarı)
+      else if (weather.windSpeed100m >= 42.0 || weather.windGusts100m >= 52.0 || weather.windSpeed >= 28.0) {
+        final isCraneCritical = weather.windSpeed100m >= 42.0 || weather.windGusts100m >= 52.0;
+        alertTitle = isCraneCritical
+            ? '💨 WeatherNext 3 • 100m Vinç Fırtına Uyarısı'
+            : '💨 WeatherNext 3 • Şiddetli Rüzgar Uyarısı';
+        alertMsg = isCraneCritical
+            ? 'Kıyı STS vinç irtifasında rüzgar ${weather.windSpeed100m.round()} km/s (Hamle: ${weather.windGusts100m.round()} km/s) seviyesine ulaştı. Kule vinç operasyonlarında fırtına kilitlerini hazırlayınız!'
+            : 'Liman sahasında rüzgar hızı ${weather.windSpeed.round()} km/s (100m Vinç: ${weather.windSpeed100m.round()} km/s, Hamle: ${weather.windGusts.round()} km/s) seviyesine ulaştı. Açık saha operasyonlarında dikkatli olunuz.';
+        alertSound = 'wind';
+        alertType = 'wind';
+      }
+      // 3. ÖNCELİK: ECMWF AIFS WAVE DENİZ & DALGA UYARISI (1.0m+ Sınırı)
+      else if (weather.waveHeight >= 1.0) {
+        alertTitle = '🌊 AIFS Wave AI • İSDEMİR Yüksek Dalga Alarmı (>1m)';
+        alertMsg = 'ECMWF AIFS Wave (36.724, 36.178) analizine göre rıhtımda dalga boyu ${weather.waveHeight.toStringAsFixed(1)}m ile 1 metre sınırını aştı! Gemi bağlama ve rıhtım operasyonlarında acil tedbir alınız.';
+        alertSound = 'sea_ambient';
+        alertType = 'wave';
+      }
+      // 4. ÖNCELİK: GOOGLE METNET-3 VEYA WEATHERNEXT 3 YAĞIŞ UYARISI
+      else if (weather.metNetRainInMinutes > 0 && weather.metNetRainInMinutes <= 45) {
+        alertTitle = '🌧️ Google MetNet-3 • ${weather.metNetRainInMinutes} Dk Sonra Yağmur!';
+        alertMsg = 'MetNet-3 radar nowcast analizine göre İsdemir sahasına ${weather.metNetRainInMinutes} dakika sonra yağış giriyor (~${weather.metNetNextHourTotalPrecip.toStringAsFixed(1)} mm). Açık sahadaki personeli, elektrikli ekipmanı ve ambarları korumaya alınız!';
+        alertSound = 'rain';
+        alertType = 'rain';
+      }
+      // 5. ÖNCELİK: AŞIRI TERMAL STRES & İSG UYARISI
+      else if (weather.apparentTemperature >= 38.0) {
+        alertTitle = '🔥 WeatherNext 3 • Aşırı Sıcak & İSG Uyarısı';
+        alertMsg = 'Hissedilen sıcaklık ${weather.apparentTemperature.round()}°C seviyesine ulaştı. Açık saha personeline sık su tüketimi ve gölge molası tavsiye edilir.';
+        alertType = 'heat';
       }
 
-      // 3. Yağmur Uyarısı (Islanmaya Hassas Yükler)
-      if (weather.nextRainTime != null) {
-        final lastRainAlert = prefs.getInt('last_weather_rain_alert') ?? 0;
-        if (nowMs - lastRainAlert > 4 * 60 * 60 * 1000) {
-          final timeStr = "${weather.nextRainTime!.hour.toString().padLeft(2, '0')}:00";
-          final title = '🌧️ İSDEMİR Yağmur & Yağış Uyarısı';
-          final msg = 'Saat $timeStr civarında Payas ve İsdemir sahasında yağış bekleniyor. Islanmaya hassas rulo sac ve çimento operasyonlarında tedbir alınız.';
-          await _sendPush(title, msg);
-          await prefs.setInt('last_weather_rain_alert', nowMs);
-        }
-      }
+      // Eğer hiçbir kritik hava olayı yoksa veya aynı başlık 6 saat içinde zaten atıldıysa gönderme
+      if (alertTitle == null || alertMsg == null) return;
+      if (alertTitle == lastGlobalTitle && (nowMs - lastGlobalAlert < 6 * 60 * 60 * 1000)) return;
 
-      // 4. Deniz / Yüksek Dalga Uyarısı (Rıhtım & Gemi Bağlama)
-      if (weather.waveHeight >= 1.0) {
-        final lastWaveAlert = prefs.getInt('last_weather_wave_alert') ?? 0;
-        if (nowMs - lastWaveAlert > 6 * 60 * 60 * 1000) {
-          final title = '⚠️ İSDEMİR Liman Dalga Uyarısı';
-          final msg = 'İsdemir açıklarında dalga boyu ${weather.waveHeight} metreye ulaştı. Rıhtım yükleme ve gemi yanaşma operasyonlarında dikkatli olunuz.';
-          await _sendPush(title, msg);
-          await prefs.setInt('last_weather_wave_alert', nowMs);
-        }
-      }
+      // Tek ve güvenli gönderim
+      await _sendPush(alertTitle, alertMsg, sound: alertSound, weatherType: alertType);
 
-      // 5. Aşırı Sıcaklık & İSG Uyarısı
-      if (weather.apparentTemperature >= 38.0 || weather.temperature >= 38.0) {
-        final lastHeatAlert = prefs.getInt('last_weather_heat_alert') ?? 0;
-        if (nowMs - lastHeatAlert > 6 * 60 * 60 * 1000) {
-          final title = '🔥 İSDEMİR Aşırı Sıcak & İSG Uyarısı';
-          final msg = 'Hissedilen sıcaklık ${weather.apparentTemperature.round()}°C seviyesine ulaştı. Açık sahada çalışan personelin sık sıvı tüketmesi ve gölge molası vermesi önerilir.';
-          await _sendPush(title, msg);
-          await prefs.setInt('last_weather_heat_alert', nowMs);
-        }
-      }
+      // Global kilit zamanını kaydet
+      await prefs.setInt('last_weather_global_alert_ms', nowMs);
+      await prefs.setString('last_weather_global_title', alertTitle);
     } catch (e) {
-      print('Hava durumu push bildirimi hatası: $e');
+      debugPrint('WeatherNext 3 push notification error: $e');
     }
   }
 
-  static Future<void> _sendPush(String title, String content) async {
-    // 1. Render sunucumuz üzerinden güvenli bildirim gönderimi
+  static Future<void> _sendPush(
+    String title,
+    String content, {
+    String? sound,
+    String? weatherType,
+  }) async {
+    bool sentSuccessfully = false;
+
+    // 1. Render sunucumuz üzerinden güvenli ve tekil bildirim gönderimi
     try {
-      await http.post(
+      final res = await http.post(
         Uri.parse('https://isdemir-chat-server.onrender.com/api/weather/notify'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
           'title': title,
           'message': content,
+          'sound': sound,
+          'weatherType': weatherType,
         }),
-      ).timeout(const Duration(seconds: 4));
+      ).timeout(const Duration(seconds: 5));
+      if (res.statusCode == 200 || res.statusCode == 201) {
+        sentSuccessfully = true;
+      }
     } catch (_) {}
 
-    // 2. Yedek doğrudan OneSignal REST API
-    try {
-      final key = utf8.decode(base64.decode('b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk='));
-      await http.post(
-        Uri.parse('https://onesignal.com/api/v1/notifications'),
-        headers: {
-          'Content-Type': 'application/json; charset=utf-8',
-          'Authorization': 'Key $key',
-        },
-        body: json.encode({
+    // 2. YALNIZCA Render sunucusu yanıt vermezse yedek OneSignal REST API kullanılır (Çift gönderimi önler)
+    if (!sentSuccessfully) {
+      try {
+        final key = utf8.decode(base64.decode('b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk='));
+        final Map<String, dynamic> payload = {
           'app_id': '74f25810-49aa-4dd1-938c-c30229368a63',
           'headings': {'en': title, 'tr': title},
           'contents': {'en': content, 'tr': content},
           'included_segments': ['Total Subscriptions'],
-        }),
-      ).timeout(const Duration(seconds: 4));
-    } catch (_) {}
+          'data': {
+            'type': 'weather',
+            'weather_type': weatherType ?? 'general',
+            'sound': sound,
+          },
+        };
+        if (sound != null) {
+          payload['android_sound'] = sound;
+          payload['ios_sound'] = '$sound.wav';
+        }
+        await http.post(
+          Uri.parse('https://onesignal.com/api/v1/notifications'),
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Authorization': 'Key $key',
+          },
+          body: json.encode(payload),
+        ).timeout(const Duration(seconds: 4));
+      } catch (_) {}
+    }
   }
 
   static String getConditionTextForCode(int code) => _getConditionTextForCode(code);

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -19,6 +18,7 @@ import 'noctra/noctra_screen.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:intl/intl.dart';
 import 'isg_screen.dart';
+import 'earth2_ai_screen.dart';
 import 'telsiz_screen.dart';
 import 'yetkili_screen.dart';
 import '../utils/socket_service.dart';
@@ -372,52 +372,70 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
             children: pages,
           ),
         ),
-        floatingActionButton: SizedBox(
-          width: 72,
-          height: 72,
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              // Outer concentric ring
-              Container(
-                width: 72,
-                height: 72,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFE50914).withValues(alpha: 0.1),
+        floatingActionButton: BouncyTap(
+          onTap: _showQuickActions,
+          child: SizedBox(
+            width: 76,
+            height: 76,
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Outer ambient radial glow
+                IgnorePointer(
+                  child: Container(
+                    width: 76,
+                    height: 76,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      gradient: RadialGradient(
+                        colors: [
+                          const Color(0xFFDC2626).withValues(alpha: 0.35),
+                          Colors.transparent,
+                        ],
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              // Inner concentric ring
-              Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: const Color(0xFFE50914).withValues(alpha: 0.2),
+                // Inner frosted halo ring
+                IgnorePointer(
+                  child: Container(
+                    width: 62,
+                    height: 62,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFFDC2626).withValues(alpha: 0.16),
+                      border: Border.all(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.35),
+                        width: 1.2,
+                      ),
+                    ),
+                  ),
                 ),
-              ),
-              // Main FAB with BouncyTap
-              BouncyTap(
-                onTap: _showQuickActions,
-                child: Container(
-                  width: 52,
-                  height: 52,
+                // Main Apple VisionOS Spatial Action FAB
+                Container(
+                  width: 54,
+                  height: 54,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     gradient: const LinearGradient(
-                      colors: [Color(0xFFE50914), Color(0xFF990000)],
+                      colors: [Color(0xFFEF4444), Color(0xFFDC2626), Color(0xFF7F1D1D)],
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                     ),
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.45),
+                      width: 1.5,
+                    ),
                     boxShadow: [
                       BoxShadow(
-                        color: const Color(0xFFE50914).withValues(alpha: 0.6),
-                        blurRadius: 16,
+                        color: const Color(0xFFDC2626).withValues(alpha: 0.65),
+                        blurRadius: 18,
                         spreadRadius: 2,
+                        offset: const Offset(0, 4),
                       ),
                     ],
                   ),
-                  child: Center(
+                  child: const Center(
                     child: HugeIcon(
                       icon: HugeIcons.strokeRoundedAdd01,
                       color: Colors.white,
@@ -425,8 +443,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     ),
                   ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
         floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
@@ -435,47 +453,48 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
           child: Container(
             margin: const EdgeInsets.only(left: 16.0, right: 16.0, bottom: 20.0),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(32),
+              borderRadius: BorderRadius.circular(34),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.45),
-                  blurRadius: 25,
+                  color: Colors.black.withValues(alpha: 0.55),
+                  blurRadius: 30,
                   offset: const Offset(0, 10),
                 )
               ],
             ),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(32),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF14171F).withValues(alpha: 0.78),
-                    borderRadius: BorderRadius.circular(32),
-                    border: Border.all(
-                      color: Colors.white.withValues(alpha: 0.12),
-                      width: 1.2,
-                    ),
-                  ),
-                  child: BottomAppBar(
-                    color: Colors.transparent,
-                    shape: const CircularNotchedRectangle(),
-                    notchMargin: 10,
-                    padding: EdgeInsets.zero,
-                    height: 76,
-                    elevation: 0,
-                    clipBehavior: Clip.antiAlias,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                      children: [
-                        Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedHome01, 'Ana Sayfa', 0))),
-                        Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedCalendar01, 'Vardiya', 1))),
-                        const SizedBox(width: 72), // FAB notch
-                        Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedClock01, 'Mesai', 2))),
-                        Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedShield01, 'Noctra', 3))),
-                      ],
-                    ),
-                  ),
+            child: Container(
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [
+                    Color(0xF2141A28),
+                    Color(0xFA090D18),
+                  ],
+                ),
+                borderRadius: BorderRadius.circular(34),
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.16),
+                  width: 1.2,
+                ),
+              ),
+              child: BottomAppBar(
+                color: Colors.transparent,
+                shape: const CircularNotchedRectangle(),
+                notchMargin: 10,
+                padding: EdgeInsets.zero,
+                height: 76,
+                elevation: 0,
+                clipBehavior: Clip.antiAlias,
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedHome01, 'Ana Sayfa', 0))),
+                    Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedCalendar01, 'Vardiya', 1))),
+                    const SizedBox(width: 72), // FAB notch
+                    Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedClock01, 'Mesai', 2))),
+                    Expanded(child: Center(child: _buildNavItem(HugeIcons.strokeRoundedShield01, 'Noctra', 3))),
+                  ],
                 ),
               ),
             ),
@@ -495,16 +514,27 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
             decoration: BoxDecoration(
-              color: isSelected ? const Color(0xFFE50914).withValues(alpha: 0.15) : Colors.transparent,
-              borderRadius: BorderRadius.circular(16),
-              border: isSelected ? Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.4), width: 1) : null,
+              gradient: isSelected
+                  ? LinearGradient(
+                      colors: [
+                        const Color(0xFFDC2626).withValues(alpha: 0.25),
+                        const Color(0xFF780A12).withValues(alpha: 0.15),
+                      ],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    )
+                  : null,
+              borderRadius: BorderRadius.circular(18),
+              border: isSelected
+                  ? Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.45), width: 1.1)
+                  : null,
               boxShadow: isSelected
                   ? [
                       BoxShadow(
-                        color: const Color(0xFFE50914).withValues(alpha: 0.3),
-                        blurRadius: 10,
+                        color: const Color(0xFFDC2626).withValues(alpha: 0.25),
+                        blurRadius: 12,
                         spreadRadius: 1,
                       ),
                     ]
@@ -515,8 +545,8 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               children: [
                 HugeIcon(
                   icon: icon,
-                  color: isSelected ? const Color(0xFFE50914) : const Color(0xFFA1A1AA),
-                  size: 23,
+                  color: isSelected ? const Color(0xFFEF4444) : const Color(0xFF94A3B8),
+                  size: 22,
                 ),
                 if (isSelected) const SizedBox(height: 3),
                 if (isSelected) 
@@ -527,25 +557,25 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
                     style: GoogleFonts.inter(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      color: const Color(0xFFE50914),
+                      color: Colors.white,
                     ),
                   ),
               ],
             ),
           ),
-          const SizedBox(height: 5),
-          // Dot indicator
+          const SizedBox(height: 4),
+          // Glow indicator
           Container(
-            width: 4,
-            height: 4,
+            width: isSelected ? 12 : 4,
+            height: 3.5,
             decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: isSelected ? const Color(0xFFE50914) : Colors.transparent,
+              borderRadius: BorderRadius.circular(2),
+              color: isSelected ? const Color(0xFFEF4444) : Colors.transparent,
               boxShadow: isSelected
                   ? [
                       const BoxShadow(
-                        color: Color(0xFFE50914),
-                        blurRadius: 6,
+                        color: Color(0xFFEF4444),
+                        blurRadius: 8,
                         spreadRadius: 1,
                       ),
                     ]
@@ -560,7 +590,7 @@ class _MainScreenState extends State<MainScreen> with WidgetsBindingObserver {
               style: GoogleFonts.inter(
                 fontSize: 10,
                 fontWeight: FontWeight.w500,
-                color: const Color(0xFFA1A1AA),
+                color: const Color(0xFF64748B),
               ),
             ),
         ],
@@ -752,6 +782,261 @@ class _QuickActionsSheet extends StatelessWidget {
                                 Text('Giriş Yap', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
                                 SizedBox(width: 8),
                                 Icon(Icons.arrow_forward_rounded, size: 18),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showEarth2PasswordDialog(BuildContext context) {
+    Navigator.pop(context);
+
+    final TextEditingController passwordController = TextEditingController();
+    bool obscureText = true;
+
+    showDialog(
+      context: parentContext,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return Dialog(
+              backgroundColor: Colors.transparent,
+              insetPadding: const EdgeInsets.symmetric(horizontal: 20),
+              child: Container(
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(
+                    colors: [
+                      Color(0xFF090E17),
+                      Color(0xFF0F1826),
+                      Color(0xFF080C14),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(28),
+                  border: Border.all(
+                    color: const Color(0xFF76B900).withValues(alpha: 0.45),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFF76B900).withValues(alpha: 0.18),
+                      blurRadius: 28,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Holographic Atmospheric Radar Glow Icon
+                    Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Container(
+                          width: 80,
+                          height: 80,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF76B900).withValues(alpha: 0.08),
+                          ),
+                        ),
+                        Container(
+                          width: 62,
+                          height: 62,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF76B900).withValues(alpha: 0.15),
+                          ),
+                        ),
+                        Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: const Color(0xFF0B141E),
+                            border: Border.all(
+                              color: const Color(0xFF76B900),
+                              width: 1.5,
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF76B900).withValues(alpha: 0.45),
+                                blurRadius: 18,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(Icons.radar_rounded, color: Color(0xFF76B900), size: 24),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 18),
+
+                    // NVIDIA Badge
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF76B900),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        'NVIDIA EARTH-2 • SECURE ACCESS',
+                        style: GoogleFonts.orbitron(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w900,
+                          color: Colors.black,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+
+                    Text(
+                      'AI MERKEZİ ERİŞİM KİLİDİ',
+                      style: GoogleFonts.orbitron(
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white,
+                        letterSpacing: 0.6,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 8),
+
+                    Text(
+                      'Payas & İskenderun yüksek çözünürlüklü dijital ikiz ve StormScope fırtına radarına erişmek için admin güvenlik anahtarını giriniz.',
+                      style: GoogleFonts.inter(
+                        fontSize: 11.5,
+                        color: const Color(0xFF94A3B8),
+                        height: 1.4,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Password input field
+                    TextField(
+                      controller: passwordController,
+                      obscureText: obscureText,
+                      style: GoogleFonts.jetBrainsMono(
+                        color: Colors.white,
+                        fontSize: 14,
+                        letterSpacing: obscureText ? 2.0 : 0.5,
+                      ),
+                      decoration: InputDecoration(
+                        hintText: 'Admin Güvenlik Anahtarı',
+                        hintStyle: GoogleFonts.inter(color: const Color(0xFF475569), fontSize: 12),
+                        filled: true,
+                        fillColor: const Color(0xFF05080E),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        enabledBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: const BorderSide(color: Color(0xFF1E2838)),
+                        ),
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: const BorderSide(color: Color(0xFF76B900), width: 1.4),
+                        ),
+                        prefixIcon: const Icon(Icons.key_rounded, color: Color(0xFF76B900), size: 19),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            obscureText ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                            color: const Color(0xFF94A3B8),
+                            size: 19,
+                          ),
+                          onPressed: () {
+                            setState(() {
+                              obscureText = !obscureText;
+                            });
+                          },
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 22),
+
+                    // Action buttons
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            style: OutlinedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              side: const BorderSide(color: Color(0xFF1E2838)),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              foregroundColor: const Color(0xFF94A3B8),
+                            ),
+                            onPressed: () => Navigator.pop(ctx),
+                            child: Text(
+                              'Vazgeç',
+                              style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: ElevatedButton(
+                            style: ElevatedButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(vertical: 14),
+                              backgroundColor: const Color(0xFF76B900),
+                              foregroundColor: Colors.black,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              elevation: 0,
+                            ),
+                            onPressed: () {
+                              if (passwordController.text.trim() == '4896281aa') {
+                                HapticFeedback.mediumImpact();
+                                Navigator.pop(ctx);
+                                Navigator.push(
+                                  parentContext,
+                                  MaterialPageRoute(builder: (_) => const Earth2AiScreen()),
+                                );
+                              } else {
+                                HapticFeedback.heavyImpact();
+                                ScaffoldMessenger.of(parentContext).showSnackBar(
+                                  SnackBar(
+                                    content: Row(
+                                      children: [
+                                        const Icon(Icons.warning_amber_rounded, color: Colors.white, size: 20),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            'Hatalı güvenlik şifresi! Erişim reddedildi.',
+                                            style: GoogleFonts.inter(fontWeight: FontWeight.w600),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    backgroundColor: const Color(0xFFDC2626),
+                                    behavior: SnackBarBehavior.floating,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  ),
+                                );
+                              }
+                            },
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text(
+                                  'Sisteme Bağlan',
+                                  style: GoogleFonts.orbitron(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.black,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                const Icon(Icons.arrow_forward_rounded, size: 16, color: Colors.black),
                               ],
                             ),
                           ),
@@ -1411,14 +1696,13 @@ class _QuickActionsSheet extends StatelessWidget {
                     const SizedBox(width: 12),
                     Expanded(
                       child: _BentoControlTile(
-                        hugeIcon: HugeIcons.strokeRoundedHealth,
-                        title: 'İSG',
-                        subtitle: 'İş & Saha Güvenliği',
-                        accentColor: const Color(0xFFEC4899),
-                        onTap: () {
-                          Navigator.pop(context);
-                          Navigator.push(parentContext, MaterialPageRoute(builder: (_) => const IsgScreen()));
-                        },
+                        hugeIcon: HugeIcons.strokeRoundedScan,
+                        title: 'AI Merkezi',
+                        subtitle: 'NVIDIA Earth-2',
+                        accentColor: const Color(0xFF76B900),
+                        isLiveGlow: true,
+                        badge: '🔒 ADMİN',
+                        onTap: () => _showEarth2PasswordDialog(context),
                       ).animate(delay: 230.ms).fadeIn(duration: 250.ms).scale(begin: const Offset(0.94, 0.94), curve: Curves.easeOutBack),
                     ),
                   ],

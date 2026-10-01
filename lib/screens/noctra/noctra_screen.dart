@@ -9,6 +9,7 @@ import '../../models/user_model.dart';
 import '../../utils/socket_service.dart';
 import 'noctra_chat_detail_screen.dart';
 import 'widgets/noctra_animations.dart';
+import 'services/noctra_ai_service.dart';
 
 class NoctraScreen extends StatefulWidget {
   final UserModel? user;
@@ -32,6 +33,7 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
   String _noctraDurum = 'kayitsiz';
   String? _savedAlias;
   bool _isLoggedIn = false; // Şifresi girilip kasa açıldı mı?
+  bool _isDecoyVault = false; // 🛡️ Duress PIN ile açılan Sahte Kasa mı?
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   String? _errorMessage;
@@ -72,9 +74,33 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
       }
     };
 
+    // Çift taraflı Panic Wipe dinleyicisi
+    SocketService().onPanicWipeReceived = (wipeData) async {
+      final senderId = wipeData['senderId'];
+      final myId = _currentUser?.id ?? SocketService().currentUserId ?? 'user';
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('noctra_chat_${myId}_$senderId');
+      await prefs.remove('noctra_last_${myId}_$senderId');
+      if (mounted) {
+        _loadLastMessages();
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            backgroundColor: Color(0xFF8B0000),
+            content: Text('🔥 [Noctra]: Karşı taraf çift taraflı Panic Wipe ile tüm konuşmayı imha etti.'),
+          ),
+        );
+      }
+    };
+
     // Yeni mesaj gelirse son mesajları güncelle
     final prevMsgCallback = SocketService().onMessageReceived;
     SocketService().onMessageReceived = (data) {
+      if (data['content'] == '__NOCTRA_PANIC_WIPE__' || data['isPanicWipe'] == true) {
+        if (SocketService().onPanicWipeReceived != null) {
+          SocketService().onPanicWipeReceived!(Map<String, dynamic>.from(data));
+        }
+        return;
+      }
       if (prevMsgCallback != null) prevMsgCallback(data);
       if (mounted) {
         _loadLastMessages();
@@ -347,6 +373,20 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
 
     final prefs = await SharedPreferences.getInstance();
     final myId = _currentUser?.id ?? 'user';
+
+    // 🛡️ DURESS AI KONTROLÜ (Zorlama / Şantaj Kodu Girildi mi?)
+    final isDuress = await NoctraAiService().isDuressPin(pass, myId);
+    if (isDuress) {
+      setState(() {
+        _isDecoyVault = true;
+        _isLoggedIn = true;
+        _errorMessage = null;
+      });
+      _passwordController.clear();
+      _stopHorrorMusic();
+      return;
+    }
+
     String? correctPassword = prefs.getString('noctra_password_$myId');
 
     // Firestore'dan da kontrol et
@@ -377,6 +417,7 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
   void _lockSession() {
     setState(() {
       _isLoggedIn = false;
+      _isDecoyVault = false;
       _passwordController.clear();
       _errorMessage = null;
     });
@@ -422,7 +463,7 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
       backgroundColor: const Color(0xFF09060A),
       body: SafeArea(
         bottom: false,
-        child: _isLoggedIn ? _buildChatListView() : _buildUnlockVaultView(),
+        child: _isLoggedIn ? (_isDecoyVault ? _buildDecoyVaultView() : _buildChatListView()) : _buildUnlockVaultView(),
       ),
     );
   }
@@ -892,7 +933,7 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
                 const Icon(Icons.masks_rounded, color: Color(0xFFE50914), size: 22),
                 const SizedBox(width: 10),
                 Text(
-                  'KOD ADI: ${_savedAlias ?? _currentUser?.fullName ?? 'Operatör'}',
+                  'KOD ADI: ${_savedAlias ?? 'Operatör'}',
                   style: GoogleFonts.orbitron(
                     fontSize: 14,
                     fontWeight: FontWeight.bold,
@@ -1154,24 +1195,36 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
               List<Map<String, dynamic>> personList = [];
               for (var doc in docs) {
                 final data = doc.data() as Map<String, dynamic>;
-                final adSoyad = (data['ad_soyad'] as String? ?? '').trim();
-                if (adSoyad.isEmpty) continue;
 
-                // Takma Ad (Alias)
+                // 1. SADECE Noctra'ya kayıt yaptıranlar (noctra_alias belirleyenler) listelenir!
                 final alias = (data['noctra_alias'] as String?)?.trim();
-                final displayAlias = (alias != null && alias.isNotEmpty)
-                    ? alias
-                    : 'Gölge_${adSoyad.split(' ').first}';
+                final noctraDurum = (data['noctra_durum'] as String?)?.trim();
 
-                final pUserId = adSoyad.toLowerCase().replaceAll(' ', '_');
+                // Noctra kaydı yoksa (normal fabrika/uygulama kullanıcısıysa) kesinlikle gösterme!
+                if (alias == null || alias.isEmpty || noctraDurum == 'reddedildi') {
+                  continue;
+                }
+
+                // 2. Sadece kayıt esnasında belirlenen isim / kod adı görünür:
+                final displayAlias = alias;
+
+                final adSoyad = (data['ad_soyad'] as String? ?? '').trim();
+                final pUserId = adSoyad.isNotEmpty
+                    ? adSoyad.toLowerCase().replaceAll(' ', '_')
+                    : doc.id;
+
                 // Kendi kullanıcımızı çıkar
-                if (pUserId == myId || displayAlias.toLowerCase() == myAlias.toLowerCase()) {
+                if (pUserId == myId ||
+                    displayAlias.toLowerCase() == myAlias.toLowerCase() ||
+                    doc.id == _personelDocId) {
                   continue;
                 }
 
                 // Çevrimiçi mi?
                 final isOnline = _onlineUsers.any((u) =>
-                    u['userId'] == pUserId || (u['name'] as String? ?? '').toLowerCase() == adSoyad.toLowerCase());
+                    u['userId'] == pUserId ||
+                    (u['name'] as String? ?? '').toLowerCase() == adSoyad.toLowerCase() ||
+                    (u['name'] as String? ?? '').toLowerCase() == displayAlias.toLowerCase());
 
                 // Son mesaj
                 final lastData = _lastMessages[pUserId];
@@ -1192,7 +1245,7 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
                 personList.add({
                   'userId': pUserId,
                   'alias': displayAlias,
-                  'avatar': data['foto_url'] ?? data['photoPath'],
+                  'avatar': null, // Gerçek profil fotoğrafı yerine gizli maske ikonu
                   'isOnline': isOnline,
                   'lastMessage': lastMsg,
                   'time': lastTime,
@@ -1429,6 +1482,125 @@ class _NoctraScreenState extends State<NoctraScreen> with SingleTickerProviderSt
           style: GoogleFonts.inter(fontSize: 8, color: const Color(0xFF70666F)),
         ),
       ],
+    );
+  }
+
+  // =========================================================================
+  // 🛡️ DURESS AI: SAHTE KASA (DECOY VAULT GÖRÜNÜMÜ)
+  // =========================================================================
+  Widget _buildDecoyVaultView() {
+    final chats = NoctraAiService().getDecoyVaultChats();
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF0C131F),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF131D2E),
+        elevation: 0,
+        leading: const Icon(Icons.business_center_rounded, color: Color(0xFF00E5FF), size: 22),
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'İSDEMİR Dahili Vardiya Koordinasyonu',
+              style: GoogleFonts.outfit(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            Text(
+              'Fabrika İçi Rutin Mesajlaşma Hattı',
+              style: GoogleFonts.inter(fontSize: 11, color: Colors.white60),
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.exit_to_app_rounded, color: Colors.white70),
+            tooltip: 'Oturumu Kapat',
+            onPressed: _lockSession,
+          ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFF182438),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline_rounded, color: Color(0xFF00E5FF), size: 18),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Bu hat fabrika içi idari ve teknik koordinasyon için ayrılmıştır.',
+                    style: GoogleFonts.inter(color: Colors.white70, fontSize: 11),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          ...chats.map((c) {
+            return Card(
+              color: const Color(0xFF162032),
+              margin: const EdgeInsets.only(bottom: 10),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(16),
+                side: BorderSide(color: Colors.white.withValues(alpha: 0.06)),
+              ),
+              child: ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: const Color(0xFF22324C),
+                  child: Text(
+                    (c['name'] as String).substring(0, 1),
+                    style: const TextStyle(color: Color(0xFF00E5FF), fontWeight: FontWeight.bold),
+                  ),
+                ),
+                title: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(c['name'], style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                    Text(c['time'], style: GoogleFonts.inter(color: Colors.white38, fontSize: 11)),
+                  ],
+                ),
+                subtitle: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 4),
+                    Text(c['lastMessage'], style: GoogleFonts.inter(color: Colors.white70, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    const SizedBox(height: 4),
+                    Text(c['department'] ?? '', style: GoogleFonts.inter(color: const Color(0xFF00E5FF), fontSize: 10, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+                onTap: () {
+                  showDialog(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: const Color(0xFF131D2E),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+                      title: Text(c['name'], style: GoogleFonts.outfit(color: Colors.white, fontSize: 16)),
+                      content: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Birim: ${c['department']}', style: GoogleFonts.inter(color: const Color(0xFF00E5FF), fontSize: 12)),
+                          const Divider(color: Colors.white12, height: 16),
+                          Text(c['lastMessage'], style: GoogleFonts.inter(color: Colors.white, fontSize: 13)),
+                        ],
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Kapat')),
+                      ],
+                    ),
+                  );
+                },
+              ),
+            );
+          }),
+        ],
+      ),
     );
   }
 }

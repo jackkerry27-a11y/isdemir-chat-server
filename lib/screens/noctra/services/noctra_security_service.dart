@@ -36,6 +36,9 @@ class NoctraMessage {
   final bool isAudio;
   final String? audioDuration;
   final bool isSteganographic;
+  final bool isCamouflaged;
+  final String? stegoCoverId;
+  final String? voiceProfile;
 
   NoctraMessage({
     required this.id,
@@ -52,6 +55,9 @@ class NoctraMessage {
     this.isAudio = false,
     this.audioDuration,
     this.isSteganographic = false,
+    this.isCamouflaged = false,
+    this.stegoCoverId,
+    this.voiceProfile,
   });
 
   Map<String, dynamic> toJson() => {
@@ -69,6 +75,9 @@ class NoctraMessage {
         'isAudio': isAudio,
         'audioDuration': audioDuration,
         'isSteganographic': isSteganographic,
+        'isCamouflaged': isCamouflaged,
+        'stegoCoverId': stegoCoverId,
+        'voiceProfile': voiceProfile,
       };
 
   factory NoctraMessage.fromJson(Map<String, dynamic> json) => NoctraMessage(
@@ -89,6 +98,9 @@ class NoctraMessage {
         isAudio: json['isAudio'] ?? false,
         audioDuration: json['audioDuration'],
         isSteganographic: json['isSteganographic'] ?? false,
+        isCamouflaged: json['isCamouflaged'] ?? false,
+        stegoCoverId: json['stegoCoverId'],
+        voiceProfile: json['voiceProfile'],
       );
 }
 

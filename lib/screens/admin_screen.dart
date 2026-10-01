@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
@@ -18,196 +19,236 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
   String _error = '';
   List<Map<String, dynamic>> _personeller = [];
   List<Map<String, dynamic>> _duyurular = [];
-  late TabController _tabController;
+  int _selectedSegment = 0; // 0: Personeller, 1: Duyurular
   String _searchQuery = '';
-  String _versionFilter = 'all'; // 'all', 'v9', 'eski'
+  String _versionFilter = 'all'; // 'all', 'noctra', 'v10', 'eski'
+
+  // Apple iOS 18 System Colors
+  static const Color iosBg = Color(0xFF000000); // True Black
+  static const Color iosCardBg = Color(0xFF1C1C1E); // Grouped Card Dark
+  static const Color iosCardSecondary = Color(0xFF2C2C2E); // Elevated Card
+  static const Color iosSeparator = Color(0xFF38383A); // 0.5px line
+  static const Color iosBlue = Color(0xFF0A84FF); // System Blue Dark
+  static const Color iosGreen = Color(0xFF30D158); // System Green Dark
+  static const Color iosRed = Color(0xFFFF453A); // System Red Dark
+  static const Color iosOrange = Color(0xFFFF9F0A); // System Orange Dark
+  static const Color iosPurple = Color(0xFFBF5AF2); // System Purple Dark
+  static const Color iosTextPrimary = Colors.white;
+  static const Color iosTextSecondary = Color(0xFF8E8E93);
+  static const Color iosTextTertiary = Color(0xFF636366);
 
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
     _fetchData();
   }
 
-  @override
-  void dispose() {
-    _tabController.dispose();
-    super.dispose();
-  }
-
   Future<void> _fetchData() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _error = '';
     });
 
     try {
-      final personelSnapshot = await FirebaseFirestore.instance.collection('personeller').orderBy('durum', descending: true).get();
-      
+      final personelSnapshot = await FirebaseFirestore.instance
+          .collection('personeller')
+          .orderBy('durum', descending: true)
+          .get();
+
       List<Map<String, dynamic>> personellerList = [];
       for (var doc in personelSnapshot.docs) {
         var data = doc.data();
         data['id'] = doc.id;
-        
+
         try {
           final logsSnapshot = await doc.reference.collection('giris_cikis_log').get();
           data['giris_cikis_log'] = logsSnapshot.docs.map((d) => d.data()).toList();
-          
+
           final hakedisSnapshot = await doc.reference.collection('hakedis').get();
           data['hakedis'] = hakedisSnapshot.docs.map((d) => d.data()).toList();
-        } catch(e) {
+        } catch (_) {
           data['giris_cikis_log'] = [];
           data['hakedis'] = [];
         }
-        
+
         personellerList.add(data);
       }
-      
-      final duyurularSnapshot = await FirebaseFirestore.instance.collection('duyurular').orderBy('tarih', descending: true).get();
-      final duyurularList = duyurularSnapshot.docs.map((doc) {
-        var data = doc.data();
-        data['id'] = doc.id;
-        // Timestamp to string if needed, but UI handles string, we might need to handle Timestamp
-        if(data['tarih'] is Timestamp) {
-          data['tarih'] = (data['tarih'] as Timestamp).toDate().toIso8601String();
-        }
-        return data;
-      }).toList();
 
+      List<Map<String, dynamic>> duyurularList = [];
+      try {
+        final duyurularSnapshot = await FirebaseFirestore.instance
+            .collection('duyurular')
+            .orderBy('tarih', descending: true)
+            .get();
+
+        duyurularList = duyurularSnapshot.docs.map((doc) {
+          var data = doc.data();
+          data['id'] = doc.id;
+          if (data['tarih'] is Timestamp) {
+            data['tarih'] = (data['tarih'] as Timestamp).toDate().toIso8601String();
+          }
+          return data;
+        }).toList();
+      } catch (de) {
+        debugPrint('Duyurular okuma uyarısı: $de');
+      }
+
+      if (!mounted) return;
       setState(() {
         _personeller = personellerList;
         _duyurular = duyurularList;
         _isLoading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
-        _error = 'Veri çekilirken hata oluştu. Hata: $e';
+        if (e.toString().contains('permission-denied')) {
+          _error = 'Firestore Güvenlik Kuralları Erişimi Engelliyor.\nKurallar güncellendi, lütfen "Tekrar Dene" butonuna dokunarak yeniden bağlanın.';
+        } else {
+          _error = 'Veri çekilirken hata oluştu: $e';
+        }
         _isLoading = false;
       });
     }
   }
 
   Future<void> _updateStatus(String id, String newStatus) async {
-    showDialog(
+    showCupertinoDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF4338CA))),
+      builder: (ctx) => const Center(
+        child: CupertinoActivityIndicator(radius: 16, color: iosBlue),
+      ),
     );
+
     try {
       await FirebaseFirestore.instance.collection('personeller').doc(id).update({'durum': newStatus});
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Durum güncellendi.')));
-      
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+
+      _showIosToast(newStatus == 'onaylandi' ? 'Personel hesabı onaylandı' : 'Personel hesabı askıya alındı');
+
       if (newStatus == 'onaylandi') {
         final personel = _personeller.firstWhere((p) => p['id'] == id, orElse: () => {});
         final cihazId = personel['cihaz_id'] as String?;
-        if (cihazId != null) {
+        if (cihazId != null && cihazId.isNotEmpty) {
           try {
             await PushService.sendPushNotification(
-              title: 'Hesabınız Onaylandı!',
-              content: 'İsdemir OS uygulamasına artık tam erişimle giriş yapabilirsiniz.',
+              title: 'Hesabınız Onaylandı! ✅',
+              content: 'İsdemir OS uygulamasına artık tam yetkiyle erişebilirsiniz.',
               targetCihazId: cihazId,
             );
           } catch (e) {
-            print("Push error: $e");
+            debugPrint("Push error: $e");
           }
         }
       }
-      
+
       _fetchData();
     } catch (e) {
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      _showIosToast('Hata: $e', isError: true);
     }
   }
 
   Future<void> _toggleVipStatus(String id, bool currentStatus) async {
-    showDialog(
+    showCupertinoDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFE50914))),
+      builder: (ctx) => const Center(
+        child: CupertinoActivityIndicator(radius: 16, color: iosOrange),
+      ),
     );
+
     try {
-      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'is_vip': !currentStatus});
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(currentStatus ? 'VIP Yetkisi Alındı.' : 'VIP Yetkisi Verildi.')));
+      final newStatus = !currentStatus;
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'is_vip': newStatus});
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+
+      _showIosToast(newStatus ? 'VIP Statüsü Tanımlandı ⭐' : 'VIP Statüsü Kaldırıldı');
       _fetchData();
     } catch (e) {
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      _showIosToast('Hata: $e', isError: true);
     }
   }
 
   Future<void> _toggleTelsizYetkisi(String id, bool currentStatus) async {
-    showDialog(
+    showCupertinoDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFF00FF66))),
+      builder: (ctx) => const Center(
+        child: CupertinoActivityIndicator(radius: 16, color: iosGreen),
+      ),
     );
+
     try {
-      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'telsiz_yetkisi': !currentStatus});
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(currentStatus ? 'Telsiz yetkisi kaldırıldı.' : 'Telsiz yetkisi verildi.'),
-          backgroundColor: currentStatus ? const Color(0xFFEF4444) : const Color(0xFF10B981),
-        ),
-      );
+      final newStatus = !currentStatus;
+      await FirebaseFirestore.instance.collection('personeller').doc(id).update({'telsiz_yetkisi': newStatus});
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+
+      _showIosToast(newStatus ? 'Telsiz Yetkisi Açıldı 📻' : 'Telsiz Yetkisi Kapatıldı');
       _fetchData();
     } catch (e) {
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      _showIosToast('Hata: $e', isError: true);
     }
   }
 
   Future<void> _toggleYetkiliStatus(String id, bool currentStatus) async {
-    showDialog(
+    showCupertinoDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFDC2626))),
+      builder: (ctx) => const Center(
+        child: CupertinoActivityIndicator(radius: 16, color: iosRed),
+      ),
     );
+
     try {
       final newStatus = !currentStatus;
       await FirebaseFirestore.instance.collection('personeller').doc(id).update({
         'is_yetkili': newStatus,
         'yetkili': newStatus,
       });
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(newStatus ? '🛡️ Yetkili Statüsü Verildi.' : 'Yetkili Statüsü Kaldırıldı.'),
-          backgroundColor: newStatus ? const Color(0xFFDC2626) : const Color(0xFF64748B),
-        ),
-      );
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+
+      _showIosToast(newStatus ? '🛡️ Yönetici Yetkisi Verildi' : 'Yönetici Yetkisi Geri Alındı');
       _fetchData();
     } catch (e) {
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      _showIosToast('Hata: $e', isError: true);
     }
   }
 
   Future<void> _updateNoctraStatus(String id, String newStatus, String? alias) async {
-    showDialog(
+    showCupertinoDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const Center(child: CircularProgressIndicator(color: Color(0xFFE50914))),
+      builder: (ctx) => const Center(
+        child: CupertinoActivityIndicator(radius: 16, color: iosPurple),
+      ),
     );
+
     try {
       await FirebaseFirestore.instance.collection('personeller').doc(id).update({
         'noctra_durum': newStatus,
         'noctra_onay_tarihi': FieldValue.serverTimestamp(),
       });
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(newStatus == 'onaylandi'
-              ? '✅ Noctra erişimi onaylandı (${alias ?? 'Kullanıcı'})'
-              : '⛔ Noctra erişim durumu: $newStatus'),
-          backgroundColor: newStatus == 'onaylandi' ? const Color(0xFF10B981) : const Color(0xFFDC2626),
-        ),
-      );
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
 
-      // Bildirim gönder
+      _showIosToast(newStatus == 'onaylandi'
+          ? 'Noctra Kasası Onaylandı 🩸 ($alias)'
+          : 'Noctra Durumu: $newStatus');
+
       if (newStatus == 'onaylandi') {
         final personel = _personeller.firstWhere((p) => p['id'] == id, orElse: () => {});
         final cihazId = personel['cihaz_id'] as String?;
@@ -226,55 +267,189 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
 
       _fetchData();
     } catch (e) {
-      Navigator.of(context).pop();
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      if (!mounted) return;
+      Navigator.of(context, rootNavigator: true).pop();
+      _showIosToast('Hata: $e', isError: true);
     }
   }
 
-  void _showAddDuyuruDialog() {
+  void _showIosToast(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isError ? CupertinoIcons.exclamationmark_circle_fill : CupertinoIcons.checkmark_alt_circle_fill,
+              color: isError ? iosRed : iosGreen,
+              size: 20,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: const Color(0xFF1E1E20),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: const BorderSide(color: Color(0xFF38383A))),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _showAddDuyuruIosSheet() {
     final titleController = TextEditingController();
     final contentController = TextEditingController();
 
-    showDialog(
+    showCupertinoModalPopup(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Yeni Duyuru Yayınla'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: titleController, decoration: const InputDecoration(labelText: 'Başlık', border: OutlineInputBorder())),
-            const SizedBox(height: 12),
-            TextField(controller: contentController, maxLines: 3, decoration: const InputDecoration(labelText: 'İçerik', border: OutlineInputBorder())),
-          ],
+      builder: (ctx) => Container(
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          left: 20,
+          right: 20,
+          top: 12,
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('İptal')),
-          ElevatedButton(
-            onPressed: () async {
-              if (titleController.text.isNotEmpty && contentController.text.isNotEmpty) {
-                Navigator.pop(context);
-                try {
-                  await FirebaseFirestore.instance.collection('duyurular').add({
-                    'baslik': titleController.text,
-                    'icerik': contentController.text,
-                    'tarih': FieldValue.serverTimestamp(),
-                  });
+        decoration: const BoxDecoration(
+          color: Color(0xFF1C1C1E),
+          borderRadius: BorderRadius.vertical(top: Radius.circular(22)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 36,
+                  height: 4.5,
+                  decoration: BoxDecoration(
+                    color: iosTextTertiary,
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('Vazgeç', style: TextStyle(color: iosTextSecondary, fontSize: 16)),
+                  ),
+                  const Text(
+                    'Yeni Duyuru',
+                    style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                  ),
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: () async {
+                      if (titleController.text.isNotEmpty && contentController.text.isNotEmpty) {
+                        Navigator.pop(ctx);
+                        try {
+                          await FirebaseFirestore.instance.collection('duyurular').add({
+                            'baslik': titleController.text,
+                            'icerik': contentController.text,
+                            'tarih': FieldValue.serverTimestamp(),
+                          });
 
-                  // Push bildirimi gönder
-                  try {
-                    await sendPushNotification(titleController.text, contentController.text);
-                  } catch (e) {
-                    print("Bildirim gönderilemedi: $e");
-                  }
-                  _fetchData();
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Duyuru yayınlandı.')));
-                } catch (e) {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
-                }
+                          try {
+                            await sendPushNotification(titleController.text, contentController.text);
+                          } catch (e) {
+                            debugPrint("Push bildirim hatası: $e");
+                          }
+
+                          _fetchData();
+                          _showIosToast('Duyuru tüm kullanıcılara iletildi');
+                        } catch (e) {
+                          _showIosToast('Hata: $e', isError: true);
+                        }
+                      }
+                    },
+                    child: const Text('Yayınla', style: TextStyle(color: iosBlue, fontSize: 16, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF2C2C2E),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Column(
+                  children: [
+                    CupertinoTextField(
+                      controller: titleController,
+                      placeholder: 'Duyuru Başlığı',
+                      placeholderStyle: const TextStyle(color: iosTextTertiary, fontSize: 15),
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: const BoxDecoration(
+                        border: Border(bottom: BorderSide(color: iosSeparator, width: 0.5)),
+                      ),
+                    ),
+                    CupertinoTextField(
+                      controller: contentController,
+                      placeholder: 'Duyuru Detayı ve Bildirim Metni...',
+                      placeholderStyle: const TextStyle(color: iosTextTertiary, fontSize: 15),
+                      style: const TextStyle(color: Colors.white, fontSize: 15),
+                      maxLines: 4,
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                      decoration: const BoxDecoration(),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              const Row(
+                children: [
+                  Icon(CupertinoIcons.paperplane_fill, size: 14, color: iosBlue),
+                  SizedBox(width: 6),
+                  Text(
+                    'OneSignal ile tüm personellere anlık push gönderilir.',
+                    style: TextStyle(color: iosTextSecondary, fontSize: 12),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteDuyuru(String id) async {
+    showCupertinoDialog(
+      context: context,
+      builder: (ctx) => CupertinoAlertDialog(
+        title: const Text('Duyuruyu Sil'),
+        content: const Text('Bu duyuru kalıcı olarak sistemden ve panodan silinecektir.'),
+        actions: [
+          CupertinoDialogAction(
+            isDefaultAction: true,
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Vazgeç'),
+          ),
+          CupertinoDialogAction(
+            isDestructiveAction: true,
+            onPressed: () async {
+              Navigator.pop(ctx);
+              try {
+                await FirebaseFirestore.instance.collection('duyurular').doc(id).delete();
+                _fetchData();
+                _showIosToast('Duyuru silindi');
+              } catch (e) {
+                _showIosToast('Hata: $e', isError: true);
               }
             },
-            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF4338CA), foregroundColor: Colors.white),
-            child: const Text('Yayınla'),
+            child: const Text('Sil'),
           ),
         ],
       ),
@@ -287,7 +462,7 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     final parts = str.split(',');
     final whole = parts[0];
     final decimal = parts[1];
-    
+
     String formattedWhole = '';
     for (int i = 0; i < whole.length; i++) {
       formattedWhole += whole[i];
@@ -307,39 +482,10 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
         initials += names[i][0].toUpperCase();
       }
     }
-    return initials;
-  }
-
-  Future<void> _deleteDuyuru(String id) async {
-    bool confirm = await showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Duyuruyu Sil'),
-        content: const Text('Bu duyuruyu silmek istediğinize emin misiniz?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('İptal')),
-          TextButton(
-            onPressed: () => Navigator.pop(context, true),
-            style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Sil'),
-          ),
-        ],
-      ),
-    ) ?? false;
-
-    if (confirm) {
-      try {
-        await FirebaseFirestore.instance.collection('duyurular').doc(id).delete();
-        _fetchData();
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Duyuru silindi.')));
-      } catch (e) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
-      }
-    }
+    return initials.isEmpty ? 'P' : initials;
   }
 
   Future<void> sendPushNotification(String title, String content) async {
-    // 1. Render sunucumuz üzerinden güvenli bildirim gönderimi
     try {
       await http.post(
         Uri.parse('https://isdemir-chat-server.onrender.com/api/ships/notify'),
@@ -351,9 +497,9 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
       );
     } catch (_) {}
 
-    // 2. Yedek doğrudan OneSignal REST API
     try {
-      final key = utf8.decode(base64.decode('b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk='));
+      final key = utf8.decode(base64.decode(
+          'b3NfdjJfYXBwX290emZxZWNqdmpnNWRlNG15bWJjc251a21uaGV6YmdrcG5pdWtzNXU3aWNleG1seXE2Nzc2cDYyM2VrMmJ5c3N2emJ4bW8ydHRqcDZjZ2xpdjZpb2pueXp5ZzJvbXViZGplb3J5eXk='));
       await http.post(
         Uri.parse('https://onesignal.com/api/v1/notifications'),
         headers: {
@@ -370,168 +516,200 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     } catch (_) {}
   }
 
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF0F0F13),
-      body: Stack(
-        children: [
-          // Arka plan resim ve gradient
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            height: 350,
-            child: Stack(
-              children: [
-                SizedBox.expand(
-                  child: Image.asset(
-                    'assets/images/factory_bg.jpg',
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        const Color(0xFFE50914).withValues(alpha: 0.2),
-                        const Color(0xFF0F0F13).withValues(alpha: 0.8),
-                        const Color(0xFF0F0F13),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          
-          Column(
-            children: [
-              _buildHeader(),
-              Expanded(
-                child: _isLoading 
-                    ? const Center(child: CircularProgressIndicator(color: Color(0xFFE50914)))
-                    : _error.isNotEmpty 
-                        ? Center(child: Text(_error, style: const TextStyle(color: Colors.red)))
-                        : TabBarView(
-                            controller: _tabController,
-                            children: [
-                              _buildPersonelTab(),
-                              _buildDuyurularTab(),
-                            ],
+      backgroundColor: iosBg,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            // ── iOS Navigation Bar ──
+            _buildIosNavigationBar(),
+
+            // ── iOS Cupertino Segmented Control ──
+            _buildIosSegmentedControl(),
+
+            // ── Segment Content ──
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CupertinoActivityIndicator(radius: 16, color: iosBlue))
+                  : _error.isNotEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(CupertinoIcons.exclamationmark_triangle_fill, color: iosRed, size: 40),
+                                const SizedBox(height: 12),
+                                Text(_error, style: const TextStyle(color: iosTextSecondary, fontSize: 14), textAlign: TextAlign.center),
+                                const SizedBox(height: 16),
+                                CupertinoButton.filled(
+                                  onPressed: _fetchData,
+                                  child: const Text('Tekrar Dene'),
+                                ),
+                              ],
+                            ),
                           ),
-              ),
-            ],
-          ),
-        ],
-      ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerFloat,
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {},
-        backgroundColor: const Color(0xFFE50914),
-        elevation: 10,
-        
-        icon: const Icon(Icons.add_circle, color: Colors.white),
-        label: const Text('Yeni Personel Ekle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16)),
+                        )
+                      : _selectedSegment == 0
+                          ? _buildPersonelTab()
+                          : _buildDuyurularTab(),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildHeader() {
-    return Container(
-      padding: EdgeInsets.only(top: MediaQuery.of(context).padding.top + 16, left: 24, right: 24, bottom: 0),
+  // ── iOS Navigation Header ──
+  Widget _buildIosNavigationBar() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.3),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: IconButton(
-                  icon: const Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () => Navigator.pop(context),
-                  padding: const EdgeInsets.all(8),
-                  constraints: const BoxConstraints(),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              // iOS Back Button
+              CupertinoButton(
+                padding: EdgeInsets.zero,
+                onPressed: () => Navigator.pop(context),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: const [
-                    Text('Admin Paneli', style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                    SizedBox(height: 4),
-                    Text('Personel yönetimi ve bordro takibi', style: TextStyle(color: Colors.white70, fontSize: 13)),
+                    Icon(CupertinoIcons.chevron_back, color: iosBlue, size: 24),
+                    SizedBox(width: 4),
+                    Text('Geri', style: TextStyle(color: iosBlue, fontSize: 17, letterSpacing: -0.4)),
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFE50914),
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: [
-                    BoxShadow(color: const Color(0xFFE50914).withValues(alpha: 0.3), blurRadius: 10, offset: const Offset(0, 4)),
-                  ]
-                ),
-                child: const Icon(Icons.people_alt, color: Colors.white, size: 28),
-              )
+
+              // iOS Action Icon
+              Row(
+                children: [
+                  CupertinoButton(
+                    padding: EdgeInsets.zero,
+                    onPressed: _fetchData,
+                    child: Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: iosCardBg,
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(color: iosSeparator, width: 0.5),
+                      ),
+                      child: const Icon(CupertinoIcons.arrow_2_circlepath, color: iosBlue, size: 18),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                    decoration: BoxDecoration(
+                      color: iosRed.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: iosRed.withValues(alpha: 0.3)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: const [
+                        Icon(CupertinoIcons.lock_shield_fill, color: iosRed, size: 13),
+                        SizedBox(width: 5),
+                        Text(
+                          'ADMİN',
+                          style: TextStyle(color: iosRed, fontWeight: FontWeight.bold, fontSize: 11, letterSpacing: 0.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
-          const SizedBox(height: 32),
-          Container(
-            height: 50,
-            decoration: BoxDecoration(
-              color: const Color(0xFF1C1C22),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: TabBar(
-              controller: _tabController,
-              indicator: BoxDecoration(
-                color: const Color(0xFFE50914).withValues(alpha: 0.2),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.5), width: 1),
-              ),
-              indicatorSize: TabBarIndicatorSize.tab,
-              labelColor: Colors.white,
-              unselectedLabelColor: Colors.white70,
-              dividerColor: Colors.transparent,
-              tabs: const [
-                Tab(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.people, size: 18),
-                      SizedBox(width: 8),
-                      Text('Personeller', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-                Tab(
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.campaign, size: 18),
-                      SizedBox(width: 8),
-                      Text('Duyurular', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                ),
-              ],
+          const SizedBox(height: 10),
+          const Text(
+            'Admin Paneli',
+            style: TextStyle(
+              color: iosTextPrimary,
+              fontSize: 32,
+              fontWeight: FontWeight.w800,
+              letterSpacing: -0.6,
             ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 2),
+          const Text(
+            'Personel yetkilendirmesi, hakediş ve sistem duyuruları',
+            style: TextStyle(color: iosTextSecondary, fontSize: 13.5, letterSpacing: -0.2),
+          ),
         ],
       ),
     );
   }
 
+  // ── iOS Cupertino Sliding Segmented Control ──
+  Widget _buildIosSegmentedControl() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      child: Container(
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: iosCardBg,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: iosSeparator, width: 0.5),
+        ),
+        child: CupertinoSlidingSegmentedControl<int>(
+          backgroundColor: Colors.transparent,
+          thumbColor: const Color(0xFF636366),
+          groupValue: _selectedSegment,
+          children: {
+            0: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(CupertinoIcons.person_2_fill, size: 16, color: _selectedSegment == 0 ? Colors.white : iosTextSecondary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Personeller (${_personeller.length})',
+                    style: TextStyle(
+                      color: _selectedSegment == 0 ? Colors.white : iosTextSecondary,
+                      fontSize: 13.5,
+                      fontWeight: _selectedSegment == 0 ? FontWeight.bold : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            1: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(CupertinoIcons.speaker_2_fill, size: 16, color: _selectedSegment == 1 ? Colors.white : iosTextSecondary),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Duyurular (${_duyurular.length})',
+                    style: TextStyle(
+                      color: _selectedSegment == 1 ? Colors.white : iosTextSecondary,
+                      fontSize: 13.5,
+                      fontWeight: _selectedSegment == 1 ? FontWeight.bold : FontWeight.w500,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          },
+          onValueChanged: (val) {
+            if (val != null) setState(() => _selectedSegment = val);
+          },
+        ),
+      ),
+    );
+  }
+
+  // ── 👥 SEKME 1: PERSONELLER (iOS Grouped Table View) ──
   Widget _buildPersonelTab() {
     final int totalCount = _personeller.length;
     final int v10Count = _personeller.where((p) {
@@ -561,208 +739,200 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
       return true;
     }).toList();
 
-    return Column(
-      children: [
-        // ── 🚀 V10.0 CANLI GÜNCELLEME TELEMETRİ BANNER'I ──
-        Container(
-          margin: const EdgeInsets.fromLTRB(24, 16, 24, 8),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                const Color(0xFF10B981).withValues(alpha: 0.15),
-                const Color(0xFF1E293B).withValues(alpha: 0.7),
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
+    return RefreshIndicator(
+      onRefresh: _fetchData,
+      color: iosBlue,
+      backgroundColor: iosCardBg,
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        children: [
+          // ── iOS Inset Telemetri Kartı ──
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: iosCardBg,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: iosSeparator, width: 0.5),
             ),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(6),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.rocket_launch_rounded, color: Color(0xFF10B981), size: 18),
-                      ),
-                      const SizedBox(width: 10),
-                      const Text(
-                        'v10.0 Uygulama Güncelleme Takibi',
-                        style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
-                      ),
-                    ],
-                  ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF10B981),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      '%${(updatePercent * 100).toInt()} Güncel',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              // İlerleme Çubuğu
-              ClipRRect(
-                borderRadius: BorderRadius.circular(6),
-                child: LinearProgressIndicator(
-                  value: updatePercent,
-                  minHeight: 6,
-                  backgroundColor: const Color(0xFF334155),
-                  valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
-                ),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    '🟢 Güncelleyenler: $v10Count Kişi',
-                    style: const TextStyle(color: Color(0xFF10B981), fontSize: 11.5, fontWeight: FontWeight.bold),
-                  ),
-                  Text(
-                    '🟠 Eski Sürüm: $eskiCount Kişi',
-                    style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11.5, fontWeight: FontWeight.bold),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-
-        // ── ARAMA & FİLTRELER ──
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 8),
-          child: Column(
-            children: [
-              Container(
-                height: 48,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1C1C22),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: TextField(
-                  onChanged: (val) => setState(() => _searchQuery = val),
-                  style: const TextStyle(color: Colors.white),
-                  decoration: const InputDecoration(
-                    hintText: 'Personel adı veya meslek ara...',
-                    hintStyle: TextStyle(color: Color(0xFFA1A1AA), fontSize: 14),
-                    prefixIcon: Icon(Icons.search, color: Color(0xFFA1A1AA)),
-                    border: InputBorder.none,
-                    contentPadding: EdgeInsets.symmetric(vertical: 14),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 10),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: Row(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    _buildVersionFilterChip('all', 'Tümü ($totalCount)'),
-                    const SizedBox(width: 8),
-                    _buildVersionFilterChip('noctra', '🩸 Noctra Talepleri ($noctraPendingCount)'),
-                    const SizedBox(width: 8),
-                    _buildVersionFilterChip('v10', '🟢 v10.0 Güncel ($v10Count)'),
-                    const SizedBox(width: 8),
-                    _buildVersionFilterChip('eski', '🟠 Eski Sürüm ($eskiCount)'),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(7),
+                          decoration: BoxDecoration(
+                            color: iosGreen.withValues(alpha: 0.2),
+                            shape: BoxShape.circle,
+                          ),
+                          child: const Icon(CupertinoIcons.rocket_fill, color: iosGreen, size: 16),
+                        ),
+                        const SizedBox(width: 10),
+                        const Text(
+                          'v10.0 Sürüm Yayılımı',
+                          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14.5),
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3.5),
+                      decoration: BoxDecoration(
+                        color: iosGreen,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        '%${(updatePercent * 100).toInt()} Hazır',
+                        style: const TextStyle(color: Colors.black, fontWeight: FontWeight.w900, fontSize: 11),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: LinearProgressIndicator(
+                    value: updatePercent,
+                    minHeight: 6,
+                    backgroundColor: iosCardSecondary,
+                    valueColor: const AlwaysStoppedAnimation<Color>(iosGreen),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('🟢 Güncel: $v10Count personel', style: const TextStyle(color: iosGreen, fontSize: 12, fontWeight: FontWeight.w600)),
+                    Text('🟠 Eski: $eskiCount personel', style: const TextStyle(color: iosOrange, fontSize: 12, fontWeight: FontWeight.w600)),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // ── iOS Arama Çubuğu ──
+          Container(
+            height: 38,
+            decoration: BoxDecoration(
+              color: iosCardBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: iosSeparator, width: 0.5),
+            ),
+            child: TextField(
+              onChanged: (val) => setState(() => _searchQuery = val),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                hintText: 'Personel adı, unvan veya Noctra ara...',
+                hintStyle: const TextStyle(color: iosTextTertiary, fontSize: 14),
+                prefixIcon: const Icon(CupertinoIcons.search, color: iosTextSecondary, size: 18),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? CupertinoButton(
+                        padding: EdgeInsets.zero,
+                        onPressed: () => setState(() => _searchQuery = ''),
+                        child: const Icon(CupertinoIcons.clear_thick_circled, color: iosTextTertiary, size: 16),
+                      )
+                    : null,
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(vertical: 8),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // ── iOS Filter Pills ──
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: [
+                _buildIosFilterPill('all', 'Tümü ($totalCount)'),
+                const SizedBox(width: 8),
+                _buildIosFilterPill('noctra', '🩸 Noctra Talepleri ($noctraPendingCount)', isAlert: noctraPendingCount > 0),
+                const SizedBox(width: 8),
+                _buildIosFilterPill('v10', '🟢 v10.0 Güncel ($v10Count)'),
+                const SizedBox(width: 8),
+                _buildIosFilterPill('eski', '🟠 Eski Sürüm ($eskiCount)'),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // ── Personel Listesi ──
+          if (filteredPersoneller.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 40),
+              child: Center(
+                child: Column(
+                  children: const [
+                    Icon(CupertinoIcons.person_crop_circle_badge_exclam, size: 40, color: iosTextTertiary),
+                    SizedBox(height: 10),
+                    Text('Kayıtlı personel bulunamadı', style: TextStyle(color: iosTextSecondary, fontSize: 14)),
                   ],
                 ),
               ),
-            ],
-          ),
-        ),
-        Expanded(
-          child: filteredPersoneller.isEmpty
-              ? const Center(child: Text('Kayıtlı personel bulunamadı.', style: TextStyle(fontSize: 16, color: Colors.grey)))
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 0),
-                  itemCount: filteredPersoneller.length,
-                  itemBuilder: (context, index) {
-                    final p = filteredPersoneller[index];
-                    final logs = p['giris_cikis_log'] as List<dynamic>? ?? [];
-                    final hakedisler = p['hakedis'] as List<dynamic>? ?? [];
-                    final hakedis = hakedisler.isNotEmpty ? hakedisler.first : null;
-                    final durum = p['durum'] as String? ?? 'bilinmiyor';
-                    
-                    return _buildPersonelCard(p, hakedis, durum, logs);
-                  },
-                ),
-        ),
-        const SizedBox(height: 80),
-      ],
+            )
+          else
+            ...filteredPersoneller.map((p) => _buildIosPersonelCard(p)),
+
+          const SizedBox(height: 40),
+        ],
+      ),
     );
   }
 
-  Widget _buildVersionFilterChip(String filterKey, String label) {
+  Widget _buildIosFilterPill(String filterKey, String label, {bool isAlert = false}) {
     final isSelected = _versionFilter == filterKey;
     return GestureDetector(
       onTap: () => setState(() => _versionFilter = filterKey),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6.5),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFE50914) : const Color(0xFF1C1C22),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isSelected ? const Color(0xFFE50914) : const Color(0xFF334155)),
+          color: isSelected ? iosBlue : (isAlert ? iosRed.withValues(alpha: 0.15) : iosCardBg),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: isSelected ? iosBlue : (isAlert ? iosRed.withValues(alpha: 0.5) : iosSeparator),
+            width: 0.8,
+          ),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: isSelected ? Colors.white : const Color(0xFFA1A1AA),
-            fontSize: 11.5,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+            color: isSelected ? Colors.white : (isAlert ? iosRed : iosTextSecondary),
+            fontSize: 12,
+            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
           ),
         ),
       ),
     );
   }
 
+  // ── iOS Grouped Card for Personnel ──
+  Widget _buildIosPersonelCard(Map<String, dynamic> p) {
+    final durum = p['durum'] as String? ?? 'onay_bekliyor';
+    final bool isApproved = durum == 'onaylandi';
+    final bool isBanned = durum == 'banlandi';
 
-  Widget _buildPersonelCard(Map<String, dynamic> p, dynamic hakedis, String durum, List<dynamic> logs) {
-    Color statusColor;
-    String statusText;
-    IconData statusIcon;
-
-    switch (durum) {
-      case 'onaylandi':
-        statusColor = const Color(0xFF10B981);
-        statusText = 'Onaylı';
-        statusIcon = Icons.check_circle_outline;
-        break;
-      case 'banlandi':
-        statusColor = const Color(0xFFE50914);
-        statusText = 'Banlandı';
-        statusIcon = Icons.block;
-        break;
-      case 'onay_bekliyor':
-      default:
-        statusColor = const Color(0xFFF59E0B);
-        statusText = 'Bekliyor';
-        statusIcon = Icons.access_time;
-        break;
-    }
+    final Color statusColor = isApproved ? iosGreen : (isBanned ? iosRed : iosOrange);
+    final String statusText = isApproved ? 'Onaylı' : (isBanned ? 'Banlı' : 'Bekliyor');
+    final IconData statusIcon = isApproved
+        ? CupertinoIcons.checkmark_circle_fill
+        : (isBanned ? CupertinoIcons.nosign : CupertinoIcons.clock_fill);
 
     final String meslek = p['meslek'] ?? 'Liman İşçisi A';
     final JobDetails jobDetails = UserModel.jobRates[meslek] ?? UserModel.jobRates['Liman İşçisi A']!;
     final double correctTabanMaas = jobDetails.baseSalary;
+    final hakedisler = p['hakedis'] as List<dynamic>? ?? [];
+    final hakedis = hakedisler.isNotEmpty ? hakedisler.first : null;
     final double hakedisAmount = hakedis != null ? (hakedis['guncel_hakedis'] as num).toDouble() : correctTabanMaas;
     final String name = p['ad_soyad'] ?? 'İsimsiz Personel';
     final String initials = _getInitials(name);
-    final String shortId = p['id'].toString().length >= 4 ? p['id'].toString().substring(0,4).replaceAll('-', '1') : '1000';
+    final String shortId = p['id'].toString().length >= 4 ? p['id'].toString().substring(0, 4).replaceAll('-', '1') : '1000';
     final bool isVip = p['is_vip'] == true;
     final bool isTelsiz = p['telsiz_yetkisi'] == true;
     final bool isYetkili = p['is_yetkili'] == true || p['yetkili'] == true;
@@ -773,673 +943,450 @@ class _AdminScreenState extends State<AdminScreen> with SingleTickerProviderStat
     final String appVer = p['app_version']?.toString() ?? 'v8.0';
     final bool isV10Updated = appVer.contains('10') || ((p['app_version_num'] as num?)?.toInt() ?? 0) >= 10;
     final String updateTime = p['guncelleme_tarihi_str'] ?? '';
+    final logs = p['giris_cikis_log'] as List<dynamic>? ?? [];
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 16),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF1C1C22),
-        borderRadius: BorderRadius.circular(16),
+        color: iosCardBg,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: iosSeparator, width: 0.5),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: Container(
-        decoration: const BoxDecoration(
-          border: Border(left: BorderSide(color: Color(0xFFE50914), width: 4)),
-        ),
-        child: Theme(
-          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-          child: ExpansionTile(
-            tilePadding: const EdgeInsets.all(16),
-            childrenPadding: EdgeInsets.zero,
-            iconColor: Colors.white,
-            collapsedIconColor: Colors.white,
-            title: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Avatar
-                Container(
-                  width: 56, height: 56,
-                  decoration: const BoxDecoration(
-                    color: Color(0xFFE50914),
-                    shape: BoxShape.circle,
-                  ),
-                  child: Center(
-                    child: Text(initials, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                // Info
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Expanded(child: Text(name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white))),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: statusColor.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: statusColor.withValues(alpha: 0.3)),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(statusIcon, size: 12, color: statusColor),
-                                const SizedBox(width: 4),
-                                Text(statusText, style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
-                          if (isVip)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6.0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE50914).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFFE50914)),
-                                ),
-                                child: const Text('VIP', style: TextStyle(color: Color(0xFFE50914), fontSize: 10, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          if (isTelsiz)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6.0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF10B981).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFF10B981)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: const [
-                                    Icon(Icons.radio_rounded, size: 11, color: Color(0xFF10B981)),
-                                    SizedBox(width: 3),
-                                    Text('TELSİZ', style: TextStyle(color: Color(0xFF10B981), fontSize: 9, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          if (isYetkili)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6.0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFDC2626).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFFDC2626)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: const [
-                                    Icon(Icons.shield_rounded, size: 11, color: Color(0xFFDC2626)),
-                                    SizedBox(width: 3),
-                                    Text('YETKİLİ', style: TextStyle(color: Color(0xFFDC2626), fontSize: 9, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          if (isNoctraPending)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6.0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFE50914).withValues(alpha: 0.25),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFFE50914)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.masks_rounded, size: 11, color: Color(0xFFE50914)),
-                                    const SizedBox(width: 3),
-                                    Text('NOCTRA: ${noctraAlias ?? 'Talep'}', style: const TextStyle(color: Color(0xFFE50914), fontSize: 9, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          if (isNoctraApproved)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6.0),
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFF8B5CF6).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: const Color(0xFF8B5CF6)),
-                                ),
-                                child: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    const Icon(Icons.masks_rounded, size: 11, color: Color(0xFFA78BFA)),
-                                    const SizedBox(width: 3),
-                                    Text('NOCTRA: ${noctraAlias ?? 'Onaylı'}', style: const TextStyle(color: Color(0xFFA78BFA), fontSize: 9, fontWeight: FontWeight.bold)),
-                                  ],
-                                ),
-                              ),
-                            ),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          const Icon(Icons.work_outline, size: 14, color: Color(0xFFA1A1AA)),
-                          const SizedBox(width: 4),
-                          Text(p['meslek'] ?? 'Belirtilmedi', style: const TextStyle(color: Color(0xFFA1A1AA), fontSize: 13)),
-                        ],
-                      ),
-                      const SizedBox(height: 6),
-                      Text('ID: 100$shortId • İşe Giriş: 12.03.2022', style: const TextStyle(color: Color(0xFF71717A), fontSize: 11)),
-                      const SizedBox(height: 6),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                            decoration: BoxDecoration(
-                              color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(6),
-                              border: Border.all(
-                                color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  isV10Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
-                                  size: 11,
-                                  color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  isV10Updated ? 'v10.0 GÜNCEL' : 'ESKİ SÜRÜM',
-                                  style: TextStyle(
-                                    color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                                    fontSize: 9.5,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          if (updateTime.isNotEmpty) ...[
-                            const SizedBox(width: 8),
-                            Text(
-                              updateTime,
-                              style: const TextStyle(color: Color(0xFF71717A), fontSize: 10.5),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+      child: Theme(
+        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+        child: ExpansionTile(
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          leading: Container(
+            width: 44,
+            height: 44,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: isApproved
+                    ? [const Color(0xFF2E7D32), const Color(0xFF1B5E20)]
+                    : [const Color(0xFF4A4A4E), const Color(0xFF2C2C2E)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              shape: BoxShape.circle,
             ),
-            subtitle: Column(
-              children: [
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF27272A).withValues(alpha: 0.5),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          const Text('Güncel Hakediş', style: TextStyle(fontSize: 11, color: Color(0xFFA1A1AA))),
-                          const SizedBox(height: 4),
-                          Text(formatCurrency(hakedisAmount), style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)),
-                          if (hakedisAmount > correctTabanMaas) ...[
-                             const SizedBox(height: 4),
-                             Text('+ ${formatCurrency(hakedisAmount - correctTabanMaas)} Mesai', style: const TextStyle(fontSize: 11, color: Color(0xFF10B981), fontWeight: FontWeight.bold)),
-                          ]
-                        ],
-                      ),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF3F3F46).withValues(alpha: 0.5),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                        ),
-                        child: Row(
-                          children: const [
-                            Icon(Icons.description_outlined, size: 16, color: Colors.white),
-                            SizedBox(width: 6),
-                            Text('Detay', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
-                          ],
-                        ),
-                      )
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 12),
-                if (isNoctraPending) ...[
-                  Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF26050B),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.7), width: 1.2),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE50914).withValues(alpha: 0.2),
-                            shape: BoxShape.circle,
-                          ),
-                          child: const Icon(Icons.masks_rounded, color: Color(0xFFE50914), size: 20),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              const Text(
-                                'Noctra Katılım Talebi',
-                                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                'Kod Adı: "${noctraAlias ?? 'Belirtilmedi'}"',
-                                style: const TextStyle(color: Color(0xFFFF7A85), fontWeight: FontWeight.w600, fontSize: 11.5),
-                              ),
-                            ],
-                          ),
-                        ),
-                        ElevatedButton.icon(
-                          onPressed: () => _updateNoctraStatus(p['id'], 'onaylandi', noctraAlias),
-                          icon: const Icon(Icons.check_rounded, size: 16, color: Colors.white),
-                          label: const Text('Onayla', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10B981),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            minimumSize: const Size(60, 32),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-                        ElevatedButton.icon(
-                          onPressed: () => _updateNoctraStatus(p['id'], 'reddedildi', noctraAlias),
-                          icon: const Icon(Icons.close_rounded, size: 16, color: Colors.white),
-                          label: const Text('Reddet', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFDC2626),
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            minimumSize: const Size(60, 32),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                ],
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        ElevatedButton.icon(
-                          onPressed: () => _toggleTelsizYetkisi(p['id'], isTelsiz),
-                          icon: Icon(isTelsiz ? Icons.radio_rounded : Icons.radio_button_off_rounded, size: 16, color: Colors.white),
-                          label: Text(isTelsiz ? 'Telsiz Açık' : 'Telsiz Ver', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isTelsiz ? const Color(0xFF10B981) : const Color(0xFF334155),
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: () => _toggleVipStatus(p['id'], isVip),
-                          icon: Icon(isVip ? Icons.star_border : Icons.star, size: 16, color: Colors.white),
-                          label: Text(isVip ? 'VIP İptal' : 'VIP Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isVip ? const Color(0xFF27272A) : const Color(0xFFE50914),
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: () => _toggleYetkiliStatus(p['id'], isYetkili),
-                          icon: Icon(isYetkili ? Icons.security_rounded : Icons.shield_outlined, size: 16, color: Colors.white),
-                          label: Text(isYetkili ? 'Yetkili İptal' : 'Yetkili Yap', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isYetkili ? const Color(0xFF27272A) : const Color(0xFFDC2626),
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        ElevatedButton.icon(
-                          onPressed: () => _updateNoctraStatus(
-                            p['id'],
-                            isNoctraApproved ? 'reddedildi' : 'onaylandi',
-                            noctraAlias,
-                          ),
-                          icon: Icon(
-                            isNoctraApproved ? Icons.lock_rounded : Icons.masks_rounded,
-                            size: 16,
-                            color: Colors.white,
-                          ),
-                          label: Text(
-                            isNoctraApproved ? 'Noctra Kapat' : 'Noctra Yetkisi',
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                          ),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: isNoctraApproved ? const Color(0xFF6D28D9) : const Color(0xFF1E141D),
-                            foregroundColor: Colors.white,
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 8),
-              ],
+            child: Center(
+              child: Text(
+                initials,
+                style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+              ),
             ),
-
+          ),
+          title: Row(
             children: [
-              const Divider(height: 1, color: Color(0xFFF1F5F9)),
-              if (logs.isNotEmpty) ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text('Son Giriş/Çıkış Hareketleri', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF4A5568))),
-                      const SizedBox(height: 8),
-                      ...(() {
-                        final sortedLogs = List<dynamic>.from(logs)..sort((a, b) {
-                          try {
-                            final dtA = DateTime.parse('${a['tarih']} ${a['saat']}');
-                            final dtB = DateTime.parse('${b['tarih']} ${b['saat']}');
-                            return dtB.compareTo(dtA);
-                          } catch (e) { return 0; }
-                        });
-                        return sortedLogs.take(3).map((log) {
-                          final isGiris = log['islem_tipi'] == 'is_giris';
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 6.0),
-                            child: Row(
-                              children: [
-                                Icon(isGiris ? Icons.login_rounded : Icons.logout_rounded, size: 14, color: isGiris ? Colors.green : Colors.red),
-                                const SizedBox(width: 8),
-                                Text(isGiris ? 'Giriş Yaptı' : 'Çıkış Yaptı', style: TextStyle(fontSize: 12, color: isGiris ? Colors.green : Colors.red, fontWeight: FontWeight.w600)),
-                                const Spacer(),
-                                Text('${log['tarih']} ${log['saat']}', style: const TextStyle(fontSize: 12, color: Color(0xFF718096))),
-                                if (log['latitude'] != null && log['longitude'] != null)
-                                  Padding(
-                                    padding: const EdgeInsets.only(left: 8.0),
-                                    child: GestureDetector(
-                                      onTap: () async {
-                                        final url = 'https://www.google.com/maps/search/?api=1&query=${log['latitude']},${log['longitude']}';
-                                        if (await canLaunchUrl(Uri.parse(url))) {
-                                          await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-                                        }
-                                      },
-                                      child: const Icon(Icons.location_on, size: 16, color: Colors.blueAccent),
-                                    ),
-                                  ),
-                              ],
-                            ),
-                          );
-                        }).toList();
-                      })(),
-                    ],
-                  ),
+              Expanded(
+                child: Text(
+                  name,
+                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white, letterSpacing: -0.3),
+                  overflow: TextOverflow.ellipsis,
                 ),
-                const Divider(height: 1, color: Color(0xFFF1F5F9)),
-              ],
-              // Mesai Detay Bölümü
-              if (hakedis != null) ...[
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.access_time_filled_rounded, size: 14, color: Color(0xFF2563EB)),
-                          const SizedBox(width: 6),
-                          const Text('Mesai Detayları', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Color(0xFF4A5568))),
-                          const Spacer(),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFEFF6FF),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: Text(hakedis['ay'] ?? '', style: const TextStyle(fontSize: 10, color: Color(0xFF2563EB), fontWeight: FontWeight.bold)),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 12),
-                      // Taban Maaş
-                      _buildMesaiRow(
-                        icon: Icons.account_balance_wallet_outlined,
-                        label: 'Taban Maaş',
-                        value: formatCurrency(correctTabanMaas),
-                        color: const Color(0xFF475569),
-                      ),
-                      const SizedBox(height: 8),
-                      // Normal Mesai
-                      _buildMesaiRow(
-                        icon: Icons.work_history_rounded,
-                        label: 'Normal Mesai',
-                        days: (hakedis['normal_mesai_gun'] as num?)?.toInt() ?? 0,
-                        value: '+ ${formatCurrency(((hakedis['normal_mesai_gun'] as num?)?.toInt() ?? 0) * jobDetails.normalMesaiRate)}',
-                        color: const Color(0xFF2563EB),
-                      ),
-                      const SizedBox(height: 8),
-                      // Bayram Mesaisi
-                      _buildMesaiRow(
-                        icon: Icons.celebration_rounded,
-                        label: 'Bayram Mesaisi',
-                        days: (hakedis['bayram_mesai_gun'] as num?)?.toInt() ?? 0,
-                        value: '+ ${formatCurrency(((hakedis['bayram_mesai_gun'] as num?)?.toInt() ?? 0) * jobDetails.bayramMesaiRate)}',
-                        color: const Color(0xFFEA580C),
-                      ),
-                      const SizedBox(height: 12),
-                      // Toplam Çizgisi
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF1E293B),
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            const Text('Güncel Hakediş', style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.bold)),
-                            Text(formatCurrency(hakedisAmount), style: const TextStyle(color: Color(0xFF10B981), fontSize: 14, fontWeight: FontWeight.w900)),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2.5),
+                decoration: BoxDecoration(
+                  color: statusColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: statusColor.withValues(alpha: 0.4), width: 0.8),
                 ),
-                const Divider(height: 1, color: Color(0xFFF1F5F9)),
-              ],
-              Padding(
-                padding: const EdgeInsets.all(16),
                 child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (durum == 'onay_bekliyor' || durum == 'banlandi')
-                      Expanded(
-                        child: ElevatedButton.icon(
-                          onPressed: () => _updateStatus(p['id'], 'onaylandi'),
-                          icon: const Icon(Icons.check_circle_rounded),
-                          label: const Text('Onayla'),
-                          style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white, elevation: 0),
-                        ),
-                      ),
-                    if (durum == 'onay_bekliyor' || durum == 'onaylandi')
-                      ...[
-                        if (durum == 'onay_bekliyor') const SizedBox(width: 12),
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            onPressed: () => _updateStatus(p['id'], 'banlandi'),
-                            icon: const Icon(Icons.block_rounded),
-                            label: const Text('Banla'),
-                            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFEF4444), foregroundColor: Colors.white, elevation: 0),
-                          ),
-                        ),
-                      ]
+                    Icon(statusIcon, size: 10, color: statusColor),
+                    const SizedBox(width: 4),
+                    Text(statusText, style: TextStyle(color: statusColor, fontSize: 10, fontWeight: FontWeight.bold)),
                   ],
                 ),
               ),
             ],
           ),
+          subtitle: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Text(meslek, style: const TextStyle(color: iosTextSecondary, fontSize: 12)),
+                  const SizedBox(width: 6),
+                  Text('• ID: #$shortId', style: const TextStyle(color: iosTextTertiary, fontSize: 11)),
+                ],
+              ),
+              const SizedBox(height: 6),
+              // iOS Status Badges Row
+              Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: [
+                  if (isVip)
+                    _buildIosPillBadge(label: 'VIP', color: iosOrange, icon: CupertinoIcons.star_fill),
+                  if (isTelsiz)
+                    _buildIosPillBadge(label: 'TELSİZ', color: iosGreen, icon: CupertinoIcons.antenna_radiowaves_left_right),
+                  if (isYetkili)
+                    _buildIosPillBadge(label: 'YETKİLİ', color: iosRed, icon: CupertinoIcons.shield_fill),
+                  if (isNoctraPending)
+                    _buildIosPillBadge(label: 'NOCTRA TALEP: $noctraAlias', color: iosRed, icon: CupertinoIcons.eye_slash_fill),
+                  if (isNoctraApproved)
+                    _buildIosPillBadge(label: 'NOCTRA AKTİF', color: iosPurple, icon: CupertinoIcons.lock_shield_fill),
+                  _buildIosPillBadge(
+                    label: isV10Updated ? (updateTime.isNotEmpty ? 'v10.0 ($updateTime)' : 'v10.0') : 'Eski Sürüm',
+                    color: isV10Updated ? iosGreen : iosOrange,
+                    icon: isV10Updated ? CupertinoIcons.checkmark_shield_fill : CupertinoIcons.exclamationmark_triangle_fill,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Quick Net Salary Row
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: iosCardSecondary,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    const Text('Güncel Hakediş:', style: TextStyle(color: iosTextSecondary, fontSize: 11.5)),
+                    Text(
+                      formatCurrency(hakedisAmount),
+                      style: const TextStyle(color: iosGreen, fontSize: 13, fontWeight: FontWeight.bold),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          children: [
+            const Divider(color: iosSeparator, height: 1, thickness: 0.5),
+
+            // ── Noctra Talep Kutusu (Beklemedeyse) ──
+            if (isNoctraPending)
+              Container(
+                margin: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: iosRed.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: iosRed.withValues(alpha: 0.5), width: 1),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(CupertinoIcons.eye_slash_fill, color: iosRed, size: 22),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text('Noctra Gizli Kasa Başvurusu', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                          Text('Kod Adı: "$noctraAlias"', style: const TextStyle(color: iosRed, fontSize: 12, fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                    CupertinoButton(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      color: iosGreen,
+                      borderRadius: BorderRadius.circular(8),
+                      onPressed: () => _updateNoctraStatus(p['id'], 'onaylandi', noctraAlias),
+                      child: const Text('Onayla', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.black)),
+                    ),
+                    const SizedBox(width: 6),
+                    CupertinoButton(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      color: iosRed,
+                      borderRadius: BorderRadius.circular(8),
+                      onPressed: () => _updateNoctraStatus(p['id'], 'reddedildi', noctraAlias),
+                      child: const Text('Reddet', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                    ),
+                  ],
+                ),
+              ),
+
+            // ── iOS Switches List ──
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              child: Column(
+                children: [
+                  _buildIosSwitchRow(
+                    title: 'Telsiz Yetkisi (Walkie-Talkie)',
+                    subtitle: 'Canlı sesli telsiz kanalına erişim izni',
+                    value: isTelsiz,
+                    activeColor: iosGreen,
+                    onChanged: (_) => _toggleTelsizYetkisi(p['id'], isTelsiz),
+                  ),
+                  const Divider(color: iosSeparator, height: 16, thickness: 0.5),
+                  _buildIosSwitchRow(
+                    title: 'VIP Hesap Yetkisi',
+                    subtitle: 'Özel posta listeleri ve operasyon izinleri',
+                    value: isVip,
+                    activeColor: iosOrange,
+                    onChanged: (_) => _toggleVipStatus(p['id'], isVip),
+                  ),
+                  const Divider(color: iosSeparator, height: 16, thickness: 0.5),
+                  _buildIosSwitchRow(
+                    title: 'Yönetici Statüsü (Yetkili)',
+                    subtitle: 'Operasyon konsoluna ve onay masasına erişim',
+                    value: isYetkili,
+                    activeColor: iosRed,
+                    onChanged: (_) => _toggleYetkiliStatus(p['id'], isYetkili),
+                  ),
+                  const Divider(color: iosSeparator, height: 16, thickness: 0.5),
+                  _buildIosSwitchRow(
+                    title: 'Noctra Gizli Kasa Protokolü',
+                    subtitle: isNoctraApproved ? 'Protokol açık' : 'Erişim kapalı',
+                    value: isNoctraApproved,
+                    activeColor: iosPurple,
+                    onChanged: (_) => _updateNoctraStatus(
+                      p['id'],
+                      isNoctraApproved ? 'reddedildi' : 'onaylandi',
+                      noctraAlias,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            const Divider(color: iosSeparator, height: 1, thickness: 0.5),
+
+            // ── Son Giriş/Çıkış Bilgisi ──
+            if (logs.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Son Giriş/Çıkış Hareketleri', style: TextStyle(color: iosTextSecondary, fontSize: 11.5, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 6),
+                    ...logs.take(2).map((l) {
+                      final isGiris = (l['islem_tipi'] ?? '').toString().toLowerCase().contains('giris');
+                      final hasCoords = l['latitude'] != null && l['longitude'] != null;
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 3),
+                        child: Row(
+                          children: [
+                            Icon(isGiris ? CupertinoIcons.arrow_right_circle_fill : CupertinoIcons.arrow_left_circle_fill,
+                                color: isGiris ? iosGreen : iosRed, size: 14),
+                            const SizedBox(width: 8),
+                            Text(isGiris ? 'Giriş Yaptı' : 'Çıkış Yaptı',
+                                style: TextStyle(color: isGiris ? iosGreen : iosRed, fontSize: 12, fontWeight: FontWeight.w600)),
+                            if (hasCoords) ...[
+                              const SizedBox(width: 6),
+                              GestureDetector(
+                                onTap: () async {
+                                  final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=${l['latitude']},${l['longitude']}');
+                                  if (await canLaunchUrl(uri)) {
+                                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                  }
+                                },
+                                child: const Icon(CupertinoIcons.location_solid, color: iosBlue, size: 13),
+                              ),
+                            ],
+                            const Spacer(),
+                            Text('${l['tarih']} ${l['saat']}', style: const TextStyle(color: iosTextTertiary, fontSize: 11)),
+                          ],
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+              ),
+
+            // ── Onay & Ban Butonları ──
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 6, 14, 14),
+              child: Row(
+                children: [
+                  if (!isApproved)
+                    Expanded(
+                      child: CupertinoButton(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        color: iosGreen,
+                        borderRadius: BorderRadius.circular(10),
+                        onPressed: () => _updateStatus(p['id'], 'onaylandi'),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(CupertinoIcons.checkmark_alt, size: 16, color: Colors.black),
+                            SizedBox(width: 6),
+                            Text('Hesabı Onayla', style: TextStyle(color: Colors.black, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  if (!isApproved && !isBanned) const SizedBox(width: 10),
+                  if (!isBanned)
+                    Expanded(
+                      child: CupertinoButton(
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                        color: iosRed.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(10),
+                        onPressed: () => _updateStatus(p['id'], 'banlandi'),
+                        child: const Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(CupertinoIcons.nosign, size: 16, color: iosRed),
+                            SizedBox(width: 6),
+                            Text('Askıya Al (Ban)', style: TextStyle(color: iosRed, fontWeight: FontWeight.bold, fontSize: 13)),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
-  Widget _buildMesaiRow({
-    required IconData icon,
-    required String label,
-    required String value,
-    required Color color,
-    int? days,
+
+  Widget _buildIosPillBadge({required String label, required Color color, required IconData icon}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.4), width: 0.8),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 10, color: color),
+          const SizedBox(width: 4),
+          Text(label, style: TextStyle(color: color, fontSize: 9.5, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildIosSwitchRow({
+    required String title,
+    required String subtitle,
+    required bool value,
+    required Color activeColor,
+    required ValueChanged<bool> onChanged,
   }) {
     return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Icon(icon, size: 14, color: color),
-        const SizedBox(width: 8),
-        Text(label, style: const TextStyle(fontSize: 12, color: Color(0xFF4A5568))),
-        if (days != null) ...[
-          const SizedBox(width: 4),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text('$days gün', style: TextStyle(fontSize: 10, color: color, fontWeight: FontWeight.bold)),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: const TextStyle(color: Colors.white, fontSize: 13.5, fontWeight: FontWeight.w600)),
+              Text(subtitle, style: const TextStyle(color: iosTextSecondary, fontSize: 11)),
+            ],
           ),
-        ],
-        const Spacer(),
-        Text(value, style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: color)),
+        ),
+        CupertinoSwitch(
+          value: value,
+          activeTrackColor: activeColor,
+          onChanged: onChanged,
+        ),
       ],
     );
   }
 
+  // ── 📢 SEKME 2: DUYURULAR (iOS Grouped Style) ──
   Widget _buildDuyurularTab() {
-    return Column(
-      children: [
-        Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: ElevatedButton.icon(
-            onPressed: _showAddDuyuruDialog,
-            icon: const Icon(Icons.add),
-            label: const Text('Yeni Duyuru Ekle', style: TextStyle(fontWeight: FontWeight.bold)),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF4338CA),
-              foregroundColor: Colors.white,
-              minimumSize: const Size(double.infinity, 54),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-              elevation: 4,
-              shadowColor: const Color(0xFF4338CA).withValues(alpha: 0.4),
+    return RefreshIndicator(
+      onRefresh: _fetchData,
+      color: iosBlue,
+      backgroundColor: iosCardBg,
+      child: ListView(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        children: [
+          // iOS Primary Action Button
+          CupertinoButton(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            color: iosBlue,
+            borderRadius: BorderRadius.circular(12),
+            onPressed: _showAddDuyuruIosSheet,
+            child: const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(CupertinoIcons.plus_circle_fill, size: 18, color: Colors.white),
+                SizedBox(width: 8),
+                Text('Yeni Duyuru Yayınla', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+              ],
             ),
           ),
-        ),
-        Expanded(
-          child: _duyurular.isEmpty
-              ? const Center(child: Text('Henüz duyuru yok.', style: TextStyle(color: Colors.grey)))
-              : ListView.builder(
-                  padding: const EdgeInsets.symmetric(horizontal: 24),
-                  itemCount: _duyurular.length,
-                  itemBuilder: (context, index) {
-                    final d = _duyurular[index];
-                    return Card(
-                      elevation: 0,
-                      color: Colors.white,
-                      margin: const EdgeInsets.only(bottom: 16),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(16),
-                        side: BorderSide(color: Colors.grey.shade200),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(16),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(12),
-                              decoration: BoxDecoration(
-                                color: const Color(0xFF4338CA).withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(Icons.campaign_rounded, color: Color(0xFF4338CA), size: 28),
-                            ),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                    children: [
-                                      Expanded(child: Text(d['baslik'] ?? '', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Color(0xFF1A202C)))),
-                                      Column(
-                                        crossAxisAlignment: CrossAxisAlignment.end,
-                                        children: [
-                                          Text(
-                                            (d['tarih'] ?? '').toString().split('T').first,
-                                            style: const TextStyle(color: Color(0xFFA0AEC0), fontSize: 12),
-                                          ),
-                                          IconButton(
-                                            onPressed: () => _deleteDuyuru(d['id']),
-                                            icon: const Icon(Icons.delete_outline, color: Colors.red),
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 8),
-                                  Text(d['icerik'] ?? '', style: const TextStyle(color: Color(0xFF4A5568), height: 1.5, fontSize: 13)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+
+          const SizedBox(height: 16),
+
+          if (_duyurular.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 50),
+              child: Center(
+                child: Column(
+                  children: const [
+                    Icon(CupertinoIcons.bell_slash, size: 40, color: iosTextTertiary),
+                    SizedBox(height: 10),
+                    Text('Yayınlanmış duyuru bulunmuyor', style: TextStyle(color: iosTextSecondary, fontSize: 14)),
+                  ],
                 ),
-        ),
-      ],
+              ),
+            )
+          else
+            ..._duyurular.map((d) {
+              final dateStr = (d['tarih'] ?? '').toString().split('T').first;
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: iosCardBg,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: iosSeparator, width: 0.5),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.all(8),
+                          decoration: BoxDecoration(
+                            color: iosBlue.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: const Icon(CupertinoIcons.speaker_2_fill, color: iosBlue, size: 18),
+                        ),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                d['baslik'] ?? '',
+                                style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold, letterSpacing: -0.2),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(dateStr, style: const TextStyle(color: iosTextTertiary, fontSize: 11.5)),
+                            ],
+                          ),
+                        ),
+                        CupertinoButton(
+                          padding: const EdgeInsets.all(4),
+                          onPressed: () => _deleteDuyuru(d['id']),
+                          child: const Icon(CupertinoIcons.trash, color: iosRed, size: 18),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Text(
+                      d['icerik'] ?? '',
+                      style: const TextStyle(color: Color(0xFFD1D1D6), fontSize: 13, height: 1.4),
+                    ),
+                  ],
+                ),
+              );
+            }),
+
+          const SizedBox(height: 40),
+        ],
+      ),
     );
   }
 }

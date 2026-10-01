@@ -10,7 +10,6 @@ import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import '../utils/shift_logic.dart';
 import '../utils/pdf_font_helper.dart';
@@ -54,7 +53,27 @@ class ShiftProgressInfo {
   });
 }
 
-class _VardiyaScreenState extends State<VardiyaScreen> {
+class AiBridgeOpportunity {
+  final String title;
+  final String description;
+  final String leaveDaysText;
+  final String totalOffDaysText;
+  final String efficiencyBadge;
+  final List<DateTime> leaveDates;
+  final DateTime holidayDate;
+
+  AiBridgeOpportunity({
+    required this.title,
+    required this.description,
+    required this.leaveDaysText,
+    required this.totalOffDaysText,
+    required this.efficiencyBadge,
+    required this.leaveDates,
+    required this.holidayDate,
+  });
+}
+
+class _VardiyaScreenState extends State<VardiyaScreen> with TickerProviderStateMixin {
   DateTime _currentMonth = DateTime(DateTime.now().year, DateTime.now().month, 1);
   final DateTime _today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
   late DateTime _selectedDay;
@@ -63,7 +82,12 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
   Timer? _countdownTimer;
   DateTime _now = DateTime.now();
   bool _isGeneratingPdf = false;
-  int _touchedChartIndex = -1;
+
+  // 🧠 AI Super-Cockpit: 0 = ChronoPlan İzin, 1 = Sirkadiyen Biyoritim, 2 = NASA SAFTE
+  int _selectedAiTab = 0;
+
+  // 🌌 Apple VisionOS Aurora Arka Plan Animasyon Kontrolcüsü
+  late AnimationController _auroraController;
 
   @override
   void initState() {
@@ -71,6 +95,12 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
     _selectedDay = _today;
     _loadSelectedVardiya();
     _checkAndPromptVardiya();
+
+    _auroraController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 12),
+    )..repeat(reverse: true);
+
     _countdownTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) {
         setState(() {
@@ -83,6 +113,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
   @override
   void dispose() {
     _countdownTimer?.cancel();
+    _auroraController.dispose();
     super.dispose();
   }
 
@@ -91,7 +122,6 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
     final hasPrompted = prefs.getBool('has_prompted_vardiya_v2') ?? false;
     final saved = prefs.getString('selected_vardiya_gunu');
 
-    // Eğer kullanıcı daha önce vardiya seçmediyse veya soru sorulmadıysa
     if (!hasPrompted || saved == null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -111,22 +141,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
       builder: (ctx) {
         return PopScope(
           canPop: false,
-          child: Container(
-            padding: const EdgeInsets.only(top: 24, left: 24, right: 24, bottom: 36),
-            decoration: const BoxDecoration(
-              color: Color(0xFF13161F),
-              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
-              border: Border(
-                top: BorderSide(color: Color(0xFF3B82F6), width: 2.5),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black87,
-                  blurRadius: 40,
-                  offset: Offset(0, -10),
-                ),
-              ],
-            ),
+          child: _buildVisionOSSheetContainer(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -134,10 +149,10 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                 Center(
                   child: Container(
                     width: 44,
-                    height: 4,
+                    height: 4.5,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF333B4F),
-                      borderRadius: BorderRadius.circular(2),
+                      color: Colors.white.withValues(alpha: 0.3),
+                      borderRadius: BorderRadius.circular(3),
                     ),
                   ),
                 ),
@@ -147,11 +162,11 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                     Container(
                       padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF3B82F6).withValues(alpha: 0.15),
+                        color: const Color(0xFF0284C7).withValues(alpha: 0.2),
                         borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: const Color(0xFF3B82F6).withValues(alpha: 0.3)),
+                        border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.35)),
                       ),
-                      child: const Icon(Icons.help_outline_rounded, color: Color(0xFF60A5FA), size: 28),
+                      child: const Icon(Icons.psychology_rounded, color: Color(0xFF38BDF8), size: 28),
                     ),
                     const SizedBox(width: 14),
                     Expanded(
@@ -159,39 +174,18 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            'Hangi Vardiyadasın?',
-                            style: GoogleFonts.inter(fontSize: 20, fontWeight: FontWeight.bold, color: Colors.white),
+                            'Hangi Posta Grubundasın?',
+                            style: GoogleFonts.inter(fontSize: 19, fontWeight: FontWeight.w800, color: Colors.white),
                           ),
                           const SizedBox(height: 3),
                           Text(
-                            'Lütfen çalıştığınız posta grubunu seçin',
-                            style: GoogleFonts.inter(fontSize: 12.5, color: const Color(0xFF94A3B8)),
+                            'ChronoPlan™ AI takviminizi ve izinlerinizi optimize edecek',
+                            style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8)),
                           ),
                         ],
                       ),
                     ),
                   ],
-                ),
-                const SizedBox(height: 14),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF1E2433),
-                    borderRadius: BorderRadius.circular(14),
-                    border: Border.all(color: const Color(0xFF2E384D)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.info_outline_rounded, color: Color(0xFF38BDF8), size: 18),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: Text(
-                          'Seçiminiz hem takviminizi ayarlayacak hem de Ekip sekmesinde arkadaşlarınızın sizi doğru vardiyada görmesini sağlayacaktır.',
-                          style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1), height: 1.35),
-                        ),
-                      ),
-                    ],
-                  ),
                 ),
                 const SizedBox(height: 18),
                 _buildQuestionVardiyaOption(
@@ -216,7 +210,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                   postaLabel: '3. Posta (Cuma Grubu)',
                   tatilLabel: 'Hafta Tatili: Cuma Günleri',
                   icon: Icons.nightlight_round,
-                  color: const Color(0xFF3B82F6),
+                  color: const Color(0xFF38BDF8),
                 ),
                 _buildQuestionVardiyaOption(
                   ctx: ctx,
@@ -258,7 +252,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      '$postaLabel kaydedildi. Ekip listesinde güncellendi!',
+                      '$postaLabel kaydedildi. AI Takvimi hazır!',
                       style: const TextStyle(fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -266,7 +260,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
               ),
               backgroundColor: const Color(0xFF10B981),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
             ),
           );
         }
@@ -275,10 +269,10 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
         margin: const EdgeInsets.only(bottom: 10),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
         decoration: BoxDecoration(
-          color: isSelected ? color.withValues(alpha: 0.15) : const Color(0xFF1A1F2C),
+          color: isSelected ? color.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: isSelected ? color : const Color(0xFF2A3347),
+            color: isSelected ? color : Colors.white.withValues(alpha: 0.12),
             width: isSelected ? 1.6 : 1.0,
           ),
         ),
@@ -287,7 +281,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
             Container(
               padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.15),
+                color: color.withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Icon(icon, color: color, size: 22),
@@ -318,7 +312,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
             ),
             Icon(
               isSelected ? Icons.radio_button_checked_rounded : Icons.arrow_forward_ios_rounded,
-              color: isSelected ? color : const Color(0xFF475569),
+              color: isSelected ? color : const Color(0xFF64748B),
               size: isSelected ? 22 : 15,
             ),
           ],
@@ -331,28 +325,18 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('selected_vardiya_gunu');
     if (saved == 'carsamba') {
-      setState(() {
-        _selectedVardiya = VardiyaGunu.carsamba;
-      });
+      setState(() => _selectedVardiya = VardiyaGunu.carsamba);
     } else if (saved == 'cuma') {
-      setState(() {
-        _selectedVardiya = VardiyaGunu.cuma;
-      });
+      setState(() => _selectedVardiya = VardiyaGunu.cuma);
     } else if (saved == 'cumartesi') {
-      setState(() {
-        _selectedVardiya = VardiyaGunu.cumartesi;
-      });
+      setState(() => _selectedVardiya = VardiyaGunu.cumartesi);
     } else if (saved == 'sali') {
-      setState(() {
-        _selectedVardiya = VardiyaGunu.sali;
-      });
+      setState(() => _selectedVardiya = VardiyaGunu.sali);
     }
   }
 
   Future<void> _changeVardiya(VardiyaGunu newVardiya) async {
-    setState(() {
-      _selectedVardiya = newVardiya;
-    });
+    setState(() => _selectedVardiya = newVardiya);
     final prefs = await SharedPreferences.getInstance();
     String saveStr = 'sali';
     String displayVardiya = 'Salı Grubu';
@@ -391,13 +375,13 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
   String _getVardiyaGunuName(VardiyaGunu gun) {
     switch (gun) {
       case VardiyaGunu.sali:
-        return 'Salı Vardiyası';
+        return '1. Posta (Salı Grubu)';
       case VardiyaGunu.carsamba:
-        return 'Çarşamba Vardiyası';
+        return '2. Posta (Çarşamba Grubu)';
       case VardiyaGunu.cuma:
-        return 'Cuma Vardiyası';
+        return '3. Posta (Cuma Grubu)';
       case VardiyaGunu.cumartesi:
-        return 'Cumartesi Vardiyası';
+        return '4. Posta (Cumartesi Grubu)';
     }
   }
 
@@ -488,7 +472,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
         isBeforeShift: false,
         isAfterShift: false,
         progress: progress,
-        statusText: isInBreak ? '☕ Çay ve Yemek Molasındasınız' : 'Vardiya Bitimine Kalan Süre',
+        statusText: isInBreak ? '☕ Çay & Yemek Molası' : 'Vardiya Bitimine',
         remainingTimeString: '$h:$m:$s',
         shiftStart: start,
         shiftEnd: end,
@@ -503,13 +487,13 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
   Color _getShiftColor(ShiftType type) {
     switch (type) {
       case ShiftType.sabah:
-        return const Color(0xFFF59E0B); // Gündüz Amber
+        return const Color(0xFFF59E0B); // Amber Gündüz
       case ShiftType.gece:
-        return const Color(0xFF3B82F6); // Gece Mavi
+        return const Color(0xFF38BDF8); // Buz Mavisi Gece
       case ShiftType.aksam:
-        return const Color(0xFF8B5CF6); // Akşam Mor
+        return const Color(0xFFA78BFA); // Soft Mor Akşam
       case ShiftType.tatil:
-        return const Color(0xFF10B981); // İzin Yeşil
+        return const Color(0xFF10B981); // Zümrüt İzin
     }
   }
 
@@ -548,8 +532,154 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
       case ShiftType.aksam:
         return '16:30 - 24:30';
       case ShiftType.tatil:
-        return 'Hafta Tatili';
+        return 'İstirahat Günü';
     }
+  }
+
+  // ── 🧠 OPTION 1: CHRONOPLAN™ AI İZİN & KÖPRÜLEME MOTORU ──
+  List<AiBridgeOpportunity> _getBridgeOpportunities() {
+    final year = _currentMonth.year;
+    return [
+      AiBridgeOpportunity(
+        title: '29 Ekim Cumhuriyet Bayramı Köprüsü',
+        description: '28 Ekim yarım gün + 30 Ekim Cuma yıllık izin ile hafta tatilinizi birleştirin.',
+        leaveDaysText: '1.5 Gün İzin',
+        totalOffDaysText: '5 Gün Blok Tatil',
+        efficiencyBadge: '%233 Verim',
+        leaveDates: [DateTime(year, 10, 28), DateTime(year, 10, 30)],
+        holidayDate: DateTime(year, 10, 29),
+      ),
+      AiBridgeOpportunity(
+        title: '23 Nisan Ulusal Egemenlik Köprüsü',
+        description: 'Perşembe resmi tatilini Cuma 1 gün izin ile haftalık dinlenmeye bağlayın.',
+        leaveDaysText: '1 Gün İzin',
+        totalOffDaysText: '4 Gün Kesintisiz',
+        efficiencyBadge: '%300 Verim',
+        leaveDates: [DateTime(year, 4, 24)],
+        holidayDate: DateTime(year, 4, 23),
+      ),
+      AiBridgeOpportunity(
+        title: '19 Mayıs Gençlik & Spor Köprüsü',
+        description: 'Pazartesi 1 gün izin alarak hafta sonunu Salı resmi bayramıyla bağlayın.',
+        leaveDaysText: '1 Gün İzin',
+        totalOffDaysText: '4 Gün Dinlenme',
+        efficiencyBadge: '%300 Verim',
+        leaveDates: [DateTime(year, 5, 18)],
+        holidayDate: DateTime(year, 5, 19),
+      ),
+      AiBridgeOpportunity(
+        title: 'Büyük Kurban Bayramı AI Mega Bloğu',
+        description: 'Bayram arifesi öncesi 2 gün yıllık izin kullanarak 9 günlük kesintisiz tatil yaratın.',
+        leaveDaysText: '2 Gün İzin',
+        totalOffDaysText: '9 Gün Blok Tatil',
+        efficiencyBadge: '%350 Verim',
+        leaveDates: [DateTime(year, 5, 25), DateTime(year, 5, 26)],
+        holidayDate: DateTime(year, 5, 27),
+      ),
+    ];
+  }
+
+  AiBridgeOpportunity _getActiveBridgeForCurrentMonth() {
+    final list = _getBridgeOpportunities();
+    for (final op in list) {
+      if (op.holidayDate.month == _currentMonth.month) {
+        return op;
+      }
+    }
+    for (final op in list) {
+      if (op.holidayDate.isAfter(_now.subtract(const Duration(days: 1)))) {
+        return op;
+      }
+    }
+    return list.first;
+  }
+
+  bool _isAiBridgeDate(DateTime date) {
+    for (final op in _getBridgeOpportunities()) {
+      if (op.holidayDate.year == date.year &&
+          op.holidayDate.month == date.month &&
+          op.holidayDate.day == date.day) {
+        return true;
+      }
+      for (final l in op.leaveDates) {
+        if (l.year == date.year && l.month == date.month && l.day == date.day) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // ── 🧬 OPTION 1: SİRKADİYEN BİYORİTİM HESAPLAYICI ──
+  int _getCircadianScore(ShiftType type) {
+    switch (type) {
+      case ShiftType.sabah:
+        return 92;
+      case ShiftType.aksam:
+        return 79;
+      case ShiftType.gece:
+        if (_now.hour >= 3 && _now.hour <= 5) return 56;
+        return 66;
+      case ShiftType.tatil:
+        return 98;
+    }
+  }
+
+  Color _getCircadianColor(int score) {
+    if (score >= 90) return const Color(0xFF10B981);
+    if (score >= 75) return const Color(0xFF38BDF8);
+    if (score >= 60) return const Color(0xFFF59E0B);
+    return const Color(0xFFEF4444);
+  }
+
+  String _getCircadianStatus(ShiftType type) {
+    switch (type) {
+      case ShiftType.sabah:
+        return 'Optimum Uyanıklık • Yüksek Kortizol Zirvesi';
+      case ShiftType.aksam:
+        return 'Dengeli Biyoritim • 21:00 Melatonin Kayması';
+      case ShiftType.gece:
+        return 'Sirkadiyen Dip • 03:00-05:00 Yüksek Dikkat Riski';
+      case ShiftType.tatil:
+        return 'Hücresel Yenilenme • REM İyileşmesi';
+    }
+  }
+
+  // ── 🚀 OPTION 3: NASA SAFTE™ KOGNİTİF YORGUNLUK & ROTASYON RADARI ──
+  Map<String, dynamic> _calculateRotationRadar() {
+    int daysToNight = 0;
+    int daysToRest = 0;
+    int daysToRotation = 0;
+
+    ShiftType todayShift = ShiftLogic.getShiftType(_today, vardiyaGunu: _selectedVardiya);
+    bool foundNight = false;
+    bool foundRest = false;
+    bool foundRotation = false;
+
+    for (int i = 1; i <= 30; i++) {
+      DateTime checkDate = _today.add(Duration(days: i));
+      ShiftType s = ShiftLogic.getShiftType(checkDate, vardiyaGunu: _selectedVardiya);
+
+      if (!foundRest && s == ShiftType.tatil) {
+        daysToRest = i;
+        foundRest = true;
+      }
+      if (!foundNight && s == ShiftType.gece) {
+        daysToNight = i;
+        foundNight = true;
+      }
+      if (!foundRotation && s != todayShift && s != ShiftType.tatil) {
+        daysToRotation = i;
+        foundRotation = true;
+      }
+      if (foundNight && foundRest && foundRotation) break;
+    }
+
+    return {
+      'daysToNight': daysToNight,
+      'daysToRest': daysToRest,
+      'daysToRotation': daysToRotation,
+    };
   }
 
   void _previousMonth() {
@@ -653,7 +783,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                       children: [
                         pw.Text(safe('İSKENDERUN DEMİR VE ÇELİK A.Ş.'), style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: const PdfColor.fromInt(0xFF881337))),
                         pw.SizedBox(height: 2),
-                        pw.Text(safe('AYLIK PERSONEL VARDİYA ÇALIŞMA CETVELİ'), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
+                        pw.Text(safe('AYLIK PERSONEL VARDİYA ÇALIŞMA CETVELİ (VISION AI)'), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
                       ],
                     ),
                     pw.Container(
@@ -672,7 +802,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
                     pw.Text(safe('Vardiya Düzeni: $vardiyaAdi'), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey800)),
-                    pw.Text(safe('Oluşturulma Tarihi: ${DateFormat('dd.MM.yyyy HH:mm').format(DateTime.now())}'), style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+                    pw.Text(safe('Oluşturulma: ${DateFormat('dd.MM.yyyy HH:mm').format(DateTime.now())}'), style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
                   ],
                 ),
                 pw.SizedBox(height: 8),
@@ -764,25 +894,31 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
       builder: (context) {
-        return Container(
-          padding: const EdgeInsets.only(top: 24, left: 24, right: 24, bottom: 40),
-          decoration: const BoxDecoration(
-            color: Color(0xFF141416),
-            borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-          ),
+        return _buildVisionOSSheetContainer(
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              Center(
+                child: Container(
+                  width: 44,
+                  height: 4.5,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.3),
+                    borderRadius: BorderRadius.circular(3),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 18),
               Row(
                 children: [
                   Container(
                     padding: const EdgeInsets.all(10),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.3)),
+                      color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.3)),
                     ),
-                    child: const Icon(Icons.swap_horiz_rounded, color: Color(0xFFDC2626), size: 24),
+                    child: const Icon(Icons.sync_rounded, color: Color(0xFF38BDF8), size: 22),
                   ),
                   const SizedBox(width: 14),
                   Expanded(
@@ -790,12 +926,12 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'Vardiya Döngüsü Seç',
+                          'Posta Grubu Değiştir',
                           style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          'Liman ve fabrika saha vardiya planı',
+                          'Hafta tatili gününüze göre posta seçin',
                           style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFFA1A1AA)),
                         ),
                       ],
@@ -805,44 +941,46 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                     onTap: () => Navigator.pop(context),
                     child: Container(
                       padding: const EdgeInsets.all(8),
-                      decoration: const BoxDecoration(
-                        color: Color(0xFF1C1C22),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.08),
                         shape: BoxShape.circle,
                       ),
-                      child: const Icon(Icons.close_rounded, color: Colors.white, size: 20),
+                      child: const Icon(Icons.close_rounded, color: Colors.white, size: 18),
                     ),
                   ),
                 ],
               ),
-              const SizedBox(height: 24),
-              _buildVardiyaItem(
-                VardiyaGunu.sali, 
-                'Salı Vardiyası', 
-                'Hafta Tatili: ', 'Salı Günleri', 
-                _selectedVardiya == VardiyaGunu.sali
-              ),
-              _buildVardiyaItem(
-                VardiyaGunu.carsamba, 
-                'Çarşamba Vardiyası', 
-                'Hafta Tatili: ', 'Çarşamba Günleri', 
-                _selectedVardiya == VardiyaGunu.carsamba
-              ),
-              _buildVardiyaItem(
-                VardiyaGunu.cuma, 
-                'Cuma Vardiyası', 
-                'Hafta Tatili: ', 'Cuma Günleri', 
-                _selectedVardiya == VardiyaGunu.cuma
-              ),
-              _buildVardiyaItem(
-                VardiyaGunu.cumartesi, 
-                'Cumartesi Vardiyası', 
-                'Hafta Tatili: ', 'Cumartesi Günleri', 
-                _selectedVardiya == VardiyaGunu.cumartesi
-              ),
+              const SizedBox(height: 20),
+              _buildVardiyaItem(VardiyaGunu.sali, '1. Posta (Salı Grubu)', 'Hafta Tatili: ', 'Salı Günleri', _selectedVardiya == VardiyaGunu.sali),
+              _buildVardiyaItem(VardiyaGunu.carsamba, '2. Posta (Çarşamba Grubu)', 'Hafta Tatili: ', 'Çarşamba Günleri', _selectedVardiya == VardiyaGunu.carsamba),
+              _buildVardiyaItem(VardiyaGunu.cuma, '3. Posta (Cuma Grubu)', 'Hafta Tatili: ', 'Cuma Günleri', _selectedVardiya == VardiyaGunu.cuma),
+              _buildVardiyaItem(VardiyaGunu.cumartesi, '4. Posta (Cumartesi Grubu)', 'Hafta Tatili: ', 'Cumartesi Günleri', _selectedVardiya == VardiyaGunu.cumartesi),
             ],
           ),
         );
       },
+    );
+  }
+
+  Widget _buildVisionOSSheetContainer({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.only(top: 18, left: 22, right: 22, bottom: 38),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1420).withValues(alpha: 0.94),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.15),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 30,
+            offset: const Offset(0, -6),
+          ),
+        ],
+      ),
+      child: child,
     );
   }
 
@@ -853,47 +991,47 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
         Navigator.pop(context);
       },
       child: Container(
-        margin: const EdgeInsets.only(bottom: 12),
+        margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFDC2626).withValues(alpha: 0.08) : const Color(0xFF18181B),
-          borderRadius: BorderRadius.circular(16),
+          color: isSelected ? const Color(0xFF0284C7).withValues(alpha: 0.22) : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(18),
           border: Border.all(
-            color: isSelected ? const Color(0xFFDC2626) : const Color(0xFF27272A),
-            width: 1.2,
+            color: isSelected ? const Color(0xFF38BDF8) : Colors.white.withValues(alpha: 0.12),
+            width: isSelected ? 1.6 : 1.0,
           ),
         ),
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(14),
           child: Row(
             children: [
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: isSelected ? const Color(0xFFDC2626).withValues(alpha: 0.15) : const Color(0xFF27272A),
+                  color: isSelected ? const Color(0xFF38BDF8).withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.06),
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Icon(
-                  Icons.calendar_today_rounded,
-                  color: isSelected ? const Color(0xFFDC2626) : const Color(0xFFA1A1AA),
-                  size: 22,
+                  Icons.calendar_month_rounded,
+                  color: isSelected ? const Color(0xFF38BDF8) : const Color(0xFFA1A1AA),
+                  size: 20,
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
-                      style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                      style: GoogleFonts.inter(fontSize: 14.5, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
-                    const SizedBox(height: 3),
+                    const SizedBox(height: 2),
                     RichText(
                       text: TextSpan(
-                        style: GoogleFonts.inter(fontSize: 12.5, color: const Color(0xFFA1A1AA)),
+                        style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFFA1A1AA)),
                         children: [
                           TextSpan(text: subtitleLabel),
-                          TextSpan(text: subtitleHighlight, style: const TextStyle(color: Color(0xFFDC2626), fontWeight: FontWeight.bold)),
+                          TextSpan(text: subtitleHighlight, style: const TextStyle(color: Color(0xFF38BDF8), fontWeight: FontWeight.bold)),
                         ],
                       ),
                     ),
@@ -905,13 +1043,13 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                 height: 22,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: isSelected ? const Color(0xFFDC2626) : Colors.transparent,
+                  color: isSelected ? const Color(0xFF38BDF8) : Colors.transparent,
                   border: Border.all(
-                    color: isSelected ? const Color(0xFFDC2626) : const Color(0xFF3F3F46),
+                    color: isSelected ? const Color(0xFF38BDF8) : Colors.white.withValues(alpha: 0.25),
                     width: 2,
                   ),
                 ),
-                child: isSelected ? const Icon(Icons.check_rounded, color: Colors.white, size: 14) : null,
+                child: isSelected ? const Icon(Icons.check_rounded, color: Colors.black, size: 14) : null,
               ),
             ],
           ),
@@ -971,602 +1109,290 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
         _handleBack();
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF090A0F),
-        body: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Column(
-            children: [
-              // ── Üst Başlık & Gradient Arkaplan ──
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.only(top: 60, left: 20, right: 20, bottom: 24),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF5A0C16), Color(0xFF1E1015), Color(0xFF090A0F)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Üst Menü Satırı
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: IconButton(
-                                onPressed: _handleBack,
-                                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
-                              ),
-                            ),
-                          const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Vardiya Takvimi',
-                                style: GoogleFonts.inter(
-                                  fontSize: 20,
-                                  fontWeight: FontWeight.w900,
-                                  color: Colors.white,
-                                  letterSpacing: -0.5,
-                                ),
-                              ),
-                              Text(
-                                'İSDEMİR Saha & Liman Operasyonu',
-                                style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      Row(
-                        children: [
-                          // PDF İndir & Paylaş Butonu
-                          Container(
-                            decoration: BoxDecoration(
-                              color: Colors.white.withValues(alpha: 0.1),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: IconButton(
-                              icon: _isGeneratingPdf
-                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                  : const Icon(Icons.share_rounded, color: Colors.white, size: 20),
-                              tooltip: 'Aylık Vardiya PDF Paylaş',
-                              onPressed: _isGeneratingPdf ? null : _generateAndShareVardiyaPdf,
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          // Vardiya Seçici Modalı Açan Buton
-                          Container(
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFDC2626).withValues(alpha: 0.9),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: IconButton(
-                              icon: const Icon(Icons.swap_horiz_rounded, color: Colors.white, size: 22),
-                              tooltip: 'Vardiya Düzenini Değiştir',
-                              onPressed: _showVardiyaSelectionModal,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
+        backgroundColor: const Color(0xFF07090E),
+        body: Stack(
+          children: [
+            // 🌌 1. Apple VisionOS Ambient Aurora Arka Planı
+            _buildAnimatedAuroraCanvas(),
 
-                  const SizedBox(height: 18),
-
-                  // ── 🔴 CANLI VARDİYA HUB (Live Activity Card) ──
-                  _buildLiveActivityHub(todayShift, todayProgress)
-                      .animate()
-                      .fadeIn(duration: 400.ms)
-                      .slideY(begin: 0.08, end: 0, curve: Curves.easeOutCubic),
-
-                  const SizedBox(height: 16),
-
-                  // ── Vardiya Hızlı Geçiş Hapları ──
-                  Container(
-                    padding: const EdgeInsets.all(4),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(16),
-                      border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                    ),
-                    child: Row(
-                      children: [
-                        _buildQuickVardiyaTab(VardiyaGunu.sali, 'Salı'),
-                        _buildQuickVardiyaTab(VardiyaGunu.carsamba, 'Çarşamba'),
-                        _buildQuickVardiyaTab(VardiyaGunu.cuma, 'Cuma'),
-                        _buildQuickVardiyaTab(VardiyaGunu.cumartesi, 'Cumartesi'),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            ),
-
-            // ── TAKVİM GÖVDESİ ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Container(
-                padding: const EdgeInsets.all(18),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF12141C),
-                  borderRadius: BorderRadius.circular(24),
-                  border: Border.all(color: const Color(0xFF272A36)),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 20, offset: const Offset(0, 10)),
-                  ],
-                ),
+            // 🌟 2. Ön Plan Kaydırılabilir Cam Katmanları
+            SafeArea(
+              top: false,
+              bottom: true,
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
                 child: Column(
                   children: [
-                    // Ay Başlığı & Navigasyon
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        IconButton(
-                          icon: const Icon(Icons.chevron_left_rounded, color: Colors.white),
-                          onPressed: _previousMonth,
-                        ),
-                        Text(
-                          '${months[_currentMonth.month]} ${_currentMonth.year}',
-                          style: GoogleFonts.inter(fontSize: 17, fontWeight: FontWeight.w800, color: Colors.white),
-                        ),
-                        Row(
-                          children: [
-                            IconButton(
-                              icon: const Icon(Icons.chevron_right_rounded, color: Colors.white),
-                              onPressed: _nextMonth,
-                            ),
-                            const SizedBox(width: 4),
-                            GestureDetector(
-                              onTap: _goToToday,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                                decoration: BoxDecoration(
-                                  color: const Color(0xFFDC2626).withValues(alpha: 0.2),
-                                  borderRadius: BorderRadius.circular(14),
-                                  border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.5)),
-                                ),
-                                child: Text('Bugün', style: GoogleFonts.inter(color: const Color(0xFFFF6B6B), fontSize: 11, fontWeight: FontWeight.bold)),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
+                    // 🌟 VisionOS Spatial Floating Header
+                    _buildTopSpatialGlassBar(),
 
                     const SizedBox(height: 14),
 
-                    // Hafta Günleri
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: List.generate(7, (index) {
-                        bool isTodayWeekday = _today.weekday - 1 == index && _currentMonth.month == _today.month && _currentMonth.year == _today.year;
-                        return SizedBox(
-                          width: 34,
-                          child: Text(
-                            daysOfWeek[index],
-                            textAlign: TextAlign.center,
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                              color: isTodayWeekday ? const Color(0xFFDC2626) : const Color(0xFF94A3B8),
-                            ),
-                          ),
-                        );
-                      }),
+                    // 📱 VisionOS Canlı Vardiya Kapsülü
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildLiveShiftVisionCard(todayShift, todayProgress)
+                          .animate()
+                          .fadeIn(duration: 400.ms)
+                          .slideY(begin: 0.06, end: 0, curve: Curves.easeOutCubic),
                     ),
 
-                    const SizedBox(height: 10),
+                    const SizedBox(height: 16),
 
-                    // 7x5 Ay Gün Matrisi
-                    GridView.builder(
-                      padding: EdgeInsets.zero,
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 7,
-                        childAspectRatio: 0.88,
-                        mainAxisSpacing: 6,
-                        crossAxisSpacing: 6,
-                      ),
-                      itemCount: emptySlots + daysInMonth,
-                      itemBuilder: (context, index) {
-                        if (index < emptySlots) return const SizedBox();
-
-                        int day = index - emptySlots + 1;
-                        DateTime date = DateTime(_currentMonth.year, _currentMonth.month, day);
-                        bool isToday = date.year == _today.year && date.month == _today.month && date.day == _today.day;
-                        bool isSelected = date.year == _selectedDay.year && date.month == _selectedDay.month && date.day == _selectedDay.day;
-
-                        ShiftType shift = ShiftLogic.getShiftType(date, vardiyaGunu: _selectedVardiya);
-                        Color shiftColor = _getShiftColor(shift);
-                        String? bayram = HolidayLogic.getHolidayName(date);
-
-                        bool isDimmed = _filterShiftType != null && _filterShiftType != shift;
-                        double cellOpacity = isDimmed ? 0.22 : 1.0;
-
-                        Color bgColor = isSelected
-                            ? (isToday ? const Color(0xFFDC2626) : shiftColor.withValues(alpha: 0.35))
-                            : (isToday ? const Color(0xFFDC2626).withValues(alpha: 0.85) : shiftColor.withValues(alpha: 0.08));
-                        Color textColor = isToday || isSelected ? Colors.white : shiftColor;
-                        Color dotColor = isToday || isSelected ? Colors.white : shiftColor;
-
-                        return Opacity(
-                          opacity: cellOpacity,
-                          child: BouncyTap(
-                            onTap: () {
-                              setState(() {
-                                _selectedDay = date;
-                              });
-                              HapticFeedback.selectionClick();
-                            },
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 200),
-                              decoration: BoxDecoration(
-                                color: bgColor,
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: isSelected
-                                      ? (isToday ? Colors.white : shiftColor)
-                                      : (isToday ? const Color(0xFFDC2626) : (bayram != null ? const Color(0xFFF59E0B).withValues(alpha: 0.6) : Colors.transparent)),
-                                  width: isSelected ? 2.0 : 1.0,
-                                ),
-                                boxShadow: isSelected
-                                    ? [
-                                        BoxShadow(
-                                          color: (isToday ? const Color(0xFFDC2626) : shiftColor).withValues(alpha: 0.45),
-                                          blurRadius: 10,
-                                          spreadRadius: 1,
-                                        )
-                                      ]
-                                    : null,
-                              ),
-                              child: Stack(
-                                alignment: Alignment.center,
-                                children: [
-                                  Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      Text(
-                                        day.toString(),
-                                        style: GoogleFonts.inter(
-                                          fontSize: 15,
-                                          fontWeight: FontWeight.w800,
-                                          color: textColor,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 3),
-                                      Container(
-                                        width: 5,
-                                        height: 5,
-                                        decoration: BoxDecoration(color: dotColor, shape: BoxShape.circle),
-                                      ),
-                                    ],
-                                  ),
-                                  // Bayram Yıldız Simgesi
-                                  if (bayram != null)
-                                    Positioned(
-                                      top: 2,
-                                      right: 2,
-                                      child: const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 10),
-                                    ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        );
-                      },
+                    // 🧠 VisionOS AI Super-Cockpit Adası (ChronoPlan™ & NASA SAFTE™)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionAiSuperCockpit(todayShift),
                     ),
 
                     const SizedBox(height: 18),
 
-                    // 📊 Aylık Vardiya Dağılım Hapları (Filtreleme)
-                    Wrap(
-                      alignment: WrapAlignment.center,
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: [
-                        _buildFilterPill('Gündüz', gunduzCount, const Color(0xFFF59E0B), ShiftType.sabah),
-                        _buildFilterPill('Gece', geceCount, const Color(0xFF3B82F6), ShiftType.gece),
-                        _buildFilterPill('Akşam', aksamCount, const Color(0xFF8B5CF6), ShiftType.aksam),
-                        _buildFilterPill('İzin', izinCount, const Color(0xFF10B981), ShiftType.tatil),
-                      ],
+                    // 📅 VisionOS Spatial Takvim Izgarası
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionSpatialCalendar(months, daysOfWeek, emptySlots, daysInMonth, gunduzCount, geceCount, aksamCount, izinCount),
                     ),
+
+                    const SizedBox(height: 16),
+
+                    // 🎯 VisionOS Seçilen Gün Detay Kartı
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionSelectedDayCard(selectedShift, selectedColor, isSelectedToday, holidayName),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // 📄 VisionOS A4 Vardiya Cetveli Hızlı Paylaşım Barı
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionPdfShareActionBar(),
+                    ),
+
+                    const SizedBox(height: 50),
                   ],
                 ),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
 
-            const SizedBox(height: 16),
+  // 🌌 Apple VisionOS Ambient Aurora Canvas
+  Widget _buildAnimatedAuroraCanvas() {
+    return AnimatedBuilder(
+      animation: _auroraController,
+      builder: (context, child) {
+        final t = _auroraController.value;
 
-            // ── SEÇİLEN GÜN DETAY KARTI ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+        return Stack(
+          children: [
+            // Derin Uzay Siyahı
+            Container(color: const Color(0xFF07090E)),
+
+            // Aurora 1 (Üst Sol - Cyan / Azure Işık Küresi)
+            Positioned(
+              top: -60 + (t * 40),
+              left: -40 + (t * 30),
               child: Container(
-                padding: const EdgeInsets.all(18),
+                width: 320,
+                height: 320,
                 decoration: BoxDecoration(
-                  color: const Color(0xFF12141C),
-                  borderRadius: BorderRadius.circular(22),
-                  border: Border.all(
-                    color: isSelectedToday ? selectedColor.withValues(alpha: 0.6) : const Color(0xFF272A36),
-                    width: isSelectedToday ? 1.5 : 1.0,
-                  ),
-                  boxShadow: [
-                    BoxShadow(color: selectedColor.withValues(alpha: 0.12), blurRadius: 20, offset: const Offset(0, 8)),
-                  ],
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          width: 52,
-                          height: 52,
-                          decoration: BoxDecoration(
-                            color: selectedColor.withValues(alpha: 0.18),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: selectedColor.withValues(alpha: 0.4), width: 1.2),
-                          ),
-                          child: Icon(_getShiftIcon(selectedShift), color: selectedColor, size: 26),
-                        ),
-                        const SizedBox(width: 14),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Text(
-                                    _getShiftName(selectedShift),
-                                    style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                                  ),
-                                  if (isSelectedToday) ...[
-                                    const SizedBox(width: 8),
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                                      decoration: BoxDecoration(
-                                        color: const Color(0xFFDC2626).withValues(alpha: 0.2),
-                                        borderRadius: BorderRadius.circular(8),
-                                        border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.6)),
-                                      ),
-                                      child: Text('BUGÜN', style: GoogleFonts.inter(color: const Color(0xFFFF8A80), fontSize: 9, fontWeight: FontWeight.bold)),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Row(
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFF1E212D),
-                                      borderRadius: BorderRadius.circular(6),
-                                    ),
-                                    child: Text(
-                                      _getShiftTime(selectedShift),
-                                      style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700, color: const Color(0xFFCBD5E1)),
-                                    ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '${_selectedDay.day} ${months[_selectedDay.month]} ${_selectedDay.year}',
-                                    style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8)),
-                                  ),
-                                ],
-                              ),
-                              if (selectedShift != ShiftType.tatil) ...[
-                                const SizedBox(height: 6),
-                                Row(
-                                  children: [
-                                    const Icon(Icons.coffee_rounded, size: 13, color: Color(0xFFF59E0B)),
-                                    const SizedBox(width: 5),
-                                    Text(
-                                      'Çay & Yemek Molası: ${ShiftLogic.getBreakTime(selectedShift)}',
-                                      style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w600),
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        if (!isSelectedToday)
-                          BouncyTap(
-                            onTap: _goToToday,
-                            child: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.08),
-                                shape: BoxShape.circle,
-                              ),
-                              child: const Icon(Icons.replay_rounded, color: Colors.white70, size: 18),
-                            ),
-                          ),
-                      ],
-                    ),
-
-                    if (holidayName != null) ...[
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B).withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.3)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 18),
-                            const SizedBox(width: 8),
-                            Text(
-                              holidayName,
-                              style: GoogleFonts.inter(color: const Color(0xFFFCD34D), fontSize: 12, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      ),
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF0284C7).withValues(alpha: 0.28),
+                      Colors.transparent,
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
 
-            const SizedBox(height: 16),
-
-            // ── 📊 fl_chart AYLIK ÇALIŞMA ANALİTİĞİ ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: _buildMonthlyAnalyticsCard(gunduzCount, geceCount, aksamCount, izinCount, daysInMonth),
+            // Aurora 2 (Orta Sağ - Yumuşak Mor / Violet Işık Küresi)
+            Positioned(
+              top: 240 - (t * 60),
+              right: -50 + (t * 25),
+              child: Container(
+                width: 300,
+                height: 300,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF7C3AED).withValues(alpha: 0.22),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
             ),
 
-            const SizedBox(height: 16),
-
-            // ── 📄 A4 VARDİYA CETVELİ PDF İNDİR BUTONU ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
+            // Aurora 3 (Alt Sol - Zümrüt / Emerald Dinlenme Parıltısı)
+            Positioned(
+              bottom: 80 + (t * 35),
+              left: -30 + (t * 45),
               child: Container(
-                width: double.infinity,
+                width: 260,
+                height: 260,
                 decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF10B981).withValues(alpha: 0.20),
+                      Colors.transparent,
+                    ],
                   ),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(color: Colors.black.withValues(alpha: 0.25), blurRadius: 16, offset: const Offset(0, 6)),
-                  ],
                 ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(20),
-                    onTap: _isGeneratingPdf ? null : _generateAndShareVardiyaPdf,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 16),
-                      child: Row(
+              ),
+            ),
+
+            // Aurora 4 (Alt Sağ - Sıcak Amber Vardiya Parıltısı)
+            Positioned(
+              bottom: -40 - (t * 20),
+              right: -30 + (t * 30),
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFFF59E0B).withValues(alpha: 0.16),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // 🌟 VisionOS Spatial Floating Top Bar
+  Widget _buildTopSpatialGlassBar() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.only(top: 56, left: 16, right: 16, bottom: 14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            const Color(0xFF0F1320).withValues(alpha: 0.85),
+            Colors.transparent,
+          ],
+        ),
+      ),
+      child: Column(
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  _buildVisionIconButton(
+                    icon: Icons.arrow_back_ios_new_rounded,
+                    onTap: _handleBack,
+                    iconSize: 16,
+                  ),
+                  const SizedBox(width: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
                         children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFDC2626),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Center(
-                              child: _isGeneratingPdf
-                                  ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                  : const Icon(Icons.picture_as_pdf_rounded, color: Colors.white, size: 22),
+                          Text(
+                            'Vardiya Takvimi',
+                            style: GoogleFonts.inter(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                              color: Colors.white,
+                              letterSpacing: -0.5,
                             ),
                           ),
-                          const SizedBox(width: 14),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'AYLIK VARDİYA CETVELİNİ İNDİR',
-                                  style: GoogleFonts.inter(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w900, letterSpacing: 0.3),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  'Resmi İSDEMİR A4 Çizelgesi (PDF)',
-                                  style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 11),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const Icon(Icons.share_rounded, color: Colors.white70, size: 18),
+                          const SizedBox(width: 8),
+                          _buildVisionPillBadge('VISION AI', const Color(0xFF38BDF8)),
                         ],
                       ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 24),
-
-            // ── VARDİYA KILAVUZU ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    'Vardiya Kılavuzu & Mola Saatleri',
-                    style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(child: _buildGuideCard(ShiftType.sabah, '09:30 - 16:30', '12:00 - 12:30 Mola', '08:45 Servis')),
-                      const SizedBox(width: 12),
-                      Expanded(child: _buildGuideCard(ShiftType.gece, '00:30 - 09:30', '03:00 - 03:30 Mola', '23:45 Servis')),
-                    ],
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(child: _buildGuideCard(ShiftType.aksam, '16:30 - 24:30', '19:00 - 19:30 Mola', '15:45 Servis')),
-                      const SizedBox(width: 12),
-                      Expanded(child: _buildGuideCard(ShiftType.tatil, 'Hafta Tatili', 'Mola Yok', 'Tam Gün İzin')),
+                      Text(
+                        'İSDEMİR Liman & Çelik Operasyonu',
+                        style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+                      ),
                     ],
                   ),
                 ],
               ),
-            ),
+              _buildVisionIconButton(
+                icon: Icons.picture_as_pdf_rounded,
+                isLoading: _isGeneratingPdf,
+                onTap: _isGeneratingPdf ? null : _generateAndShareVardiyaPdf,
+                iconSize: 18,
+              ),
+            ],
+          ),
 
-            const SizedBox(height: 100),
-          ],
-        ),
+          const SizedBox(height: 14),
+
+          // Posta Grubu Hızlı Seçici Glass Rozeti
+          BouncyTap(
+            onTap: _showVardiyaSelectionModal,
+            child: _buildVisionGlassContainer(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              borderRadius: 18,
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(7),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0284C7).withValues(alpha: 0.25),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.4)),
+                    ),
+                    child: const Icon(Icons.shield_rounded, color: Color(0xFF38BDF8), size: 16),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _getVardiyaGunuName(_selectedVardiya),
+                          style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
+                        Text(
+                          'Döngüyü veya hafta tatilinizi değiştirmek için dokunun',
+                          style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8)),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Icon(Icons.swap_horiz_rounded, color: Color(0xFF38BDF8), size: 20),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
-    ),
-  );
+    );
   }
 
-  // ── 📱 Canlı Vardiya Hub Widget'ı ──
-  Widget _buildLiveActivityHub(ShiftType todayShift, ShiftProgressInfo? todayProgress) {
+  // 📱 VisionOS Canlı Vardiya Kapsülü
+  Widget _buildLiveShiftVisionCard(ShiftType todayShift, ShiftProgressInfo? todayProgress) {
     final color = _getShiftColor(todayShift);
     final bool isInBreak = todayProgress?.isInBreak == true;
     final bool isInShift = todayProgress?.isInShift == true;
 
-    Color hubBorderColor = color.withValues(alpha: 0.3);
-    Color hubGlowColor = color;
-    if (isInBreak) {
-      hubBorderColor = const Color(0xFFF59E0B).withValues(alpha: 0.6);
-      hubGlowColor = const Color(0xFFF59E0B);
-    } else if (isInShift) {
-      hubBorderColor = const Color(0xFF00FF66).withValues(alpha: 0.5);
-      hubGlowColor = const Color(0xFF00FF66);
-    }
+    Color glowColor = isInBreak ? const Color(0xFFF59E0B) : (isInShift ? const Color(0xFF10B981) : const Color(0xFF64748B));
 
-    return Container(
+    return _buildVisionGlassContainer(
       padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(
-          color: hubBorderColor,
-          width: 1.2,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: hubGlowColor.withValues(alpha: 0.18),
-            blurRadius: 20,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
+      borderRadius: 24,
+      borderColor: glowColor.withValues(alpha: 0.35),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1576,19 +1402,14 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
               Row(
                 children: [
                   Container(
-                    width: 8,
-                    height: 8,
+                    width: 9,
+                    height: 9,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
-                      color: isInBreak
-                          ? const Color(0xFFF59E0B)
-                          : (isInShift ? const Color(0xFF00FF66) : const Color(0xFF64748B)),
+                      color: glowColor,
                       boxShadow: [
                         BoxShadow(
-                          color: (isInBreak
-                                  ? const Color(0xFFF59E0B)
-                                  : (isInShift ? const Color(0xFF00FF66) : const Color(0xFF64748B)))
-                              .withValues(alpha: 0.6),
+                          color: glowColor.withValues(alpha: 0.8),
                           blurRadius: 8,
                           spreadRadius: 1,
                         ),
@@ -1598,69 +1419,69 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                   const SizedBox(width: 8),
                   Text(
                     isInBreak
-                        ? '☕ ÇAY VE YEMEK MOLASINDASINIZ'
-                        : (isInShift ? 'CANLI VARDİYA AKTİF' : 'GÜNÜN VARDİYASI'),
+                        ? 'MOLA AKTİF'
+                        : (isInShift ? 'CANLI VARDİYA AKTİF' : 'GÜNÜN ÇALIŞMA PLANI'),
                     style: GoogleFonts.inter(
-                      fontSize: 10,
+                      fontSize: 10.5,
                       fontWeight: FontWeight.w900,
-                      color: isInBreak
-                          ? const Color(0xFFF59E0B)
-                          : (isInShift ? const Color(0xFF00FF66) : const Color(0xFF94A3B8)),
+                      color: glowColor,
                       letterSpacing: 1.2,
                     ),
                   ),
                 ],
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: (isInBreak ? const Color(0xFFF59E0B) : color).withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
+                  color: color.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: color.withValues(alpha: 0.35)),
                 ),
                 child: Text(
                   _getShiftTime(todayShift),
-                  style: GoogleFonts.inter(
+                  style: GoogleFonts.jetBrainsMono(
                     fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: isInBreak ? const Color(0xFFFBBF24) : color,
+                    fontWeight: FontWeight.bold,
+                    color: color,
                   ),
                 ),
               ),
             ],
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 14),
 
           Row(
             children: [
               Container(
-                width: 44,
-                height: 44,
+                width: 48,
+                height: 48,
                 decoration: BoxDecoration(
-                  color: (isInBreak ? const Color(0xFFF59E0B) : color).withValues(alpha: 0.2),
-                  shape: BoxShape.circle,
+                  color: (isInBreak ? const Color(0xFFF59E0B) : color).withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: (isInBreak ? const Color(0xFFF59E0B) : color).withValues(alpha: 0.4)),
                 ),
                 child: Icon(
-                  isInBreak ? Icons.restaurant_rounded : _getShiftIcon(todayShift),
+                  isInBreak ? Icons.coffee_rounded : _getShiftIcon(todayShift),
                   color: isInBreak ? const Color(0xFFFBBF24) : color,
-                  size: 24,
+                  size: 26,
                 ),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: 14),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       _getShiftName(todayShift),
-                      style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white),
+                      style: GoogleFonts.inter(fontSize: 16.5, fontWeight: FontWeight.w800, color: Colors.white),
                     ),
                     Text(
                       todayProgress?.statusText ?? 'Bugün dinlenme gününüz.',
                       style: GoogleFonts.inter(
-                        fontSize: 11,
+                        fontSize: 11.5,
                         color: isInBreak ? const Color(0xFFFCD34D) : const Color(0xFF94A3B8),
-                        fontWeight: isInBreak ? FontWeight.w600 : FontWeight.normal,
+                        fontWeight: isInBreak ? FontWeight.w700 : FontWeight.w500,
                       ),
                     ),
                   ],
@@ -1670,7 +1491,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                 Text(
                   todayProgress.remainingTimeString,
                   style: GoogleFonts.jetBrainsMono(
-                    fontSize: 18,
+                    fontSize: 20,
                     fontWeight: FontWeight.w900,
                     color: Colors.white,
                     letterSpacing: 0.5,
@@ -1679,17 +1500,15 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
             ],
           ),
 
-          // 🍵 Aktif Mola Bildirim Bandı
+          // Mola Kalan Sayacı
           if (isInBreak && todayProgress?.breakRemainingString != null) ...[
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
               decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [Color(0xFF3B2508), Color(0xFF261908)],
-                ),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.5)),
+                color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1699,7 +1518,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                       const Icon(Icons.coffee_rounded, color: Color(0xFFFBBF24), size: 16),
                       const SizedBox(width: 8),
                       Text(
-                        'Afiyet olsun! Molanın bitimine:',
+                        'Çay & Yemek Molası Bitişine:',
                         style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: const Color(0xFFFDE68A)),
                       ),
                     ],
@@ -1707,8 +1526,8 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                   Text(
                     '${todayProgress!.breakRemainingString} kaldı',
                     style: GoogleFonts.jetBrainsMono(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w800,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w900,
                       color: const Color(0xFFFBBF24),
                     ),
                   ),
@@ -1717,7 +1536,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
             ),
           ],
 
-          // Canlı İlerleme Çubuğu
+          // Canlı Vardiya İlerleme Çubuğu (VisionOS Capsule)
           if (todayProgress?.isInShift == true) ...[
             const SizedBox(height: 14),
             ClipRRect(
@@ -1725,9 +1544,9 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
               child: LinearProgressIndicator(
                 value: todayProgress!.progress,
                 minHeight: 6,
-                backgroundColor: const Color(0xFF222634),
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
                 valueColor: AlwaysStoppedAnimation<Color>(
-                  isInBreak ? const Color(0xFFF59E0B) : const Color(0xFF00FF66),
+                  isInBreak ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
                 ),
               ),
             ),
@@ -1741,7 +1560,7 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                   style: GoogleFonts.inter(
                     fontSize: 9.5,
                     fontWeight: FontWeight.bold,
-                    color: isInBreak ? const Color(0xFFFBBF24) : const Color(0xFF00FF66),
+                    color: isInBreak ? const Color(0xFFFBBF24) : const Color(0xFF10B981),
                   ),
                 ),
                 Text('Bitiş: ${_getShiftTime(todayShift).split(' - ').last}', style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF64748B))),
@@ -1749,19 +1568,15 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
             ),
           ],
 
-          // Mola & Servis Bilgisi
+          // Mola & Servis Bilgi Hapları
           if (todayProgress != null) ...[
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(
-                color: isInBreak
-                    ? const Color(0xFFF59E0B).withValues(alpha: 0.12)
-                    : const Color(0xFF0D0F15),
-                borderRadius: BorderRadius.circular(10),
-                border: isInBreak
-                    ? Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4))
-                    : null,
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
               ),
               child: Row(
                 children: [
@@ -1770,47 +1585,33 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Icon(
-                          Icons.coffee_rounded,
-                          color: isInBreak ? const Color(0xFFFBBF24) : const Color(0xFFF59E0B),
-                          size: 13,
-                        ),
-                        const SizedBox(width: 5),
+                        const Icon(Icons.coffee_rounded, color: Color(0xFFF59E0B), size: 14),
+                        const SizedBox(width: 6),
                         Flexible(
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              todayProgress.breakInfo,
-                              maxLines: 1,
-                              style: GoogleFonts.inter(
-                                fontSize: 10.5,
-                                color: isInBreak ? const Color(0xFFFBBF24) : const Color(0xFFCBD5E1),
-                                fontWeight: isInBreak ? FontWeight.w800 : FontWeight.w600,
-                              ),
-                            ),
+                          child: Text(
+                            todayProgress.breakInfo,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w600),
                           ),
                         ),
                       ],
                     ),
                   ),
-                  Container(width: 1, height: 14, margin: const EdgeInsets.symmetric(horizontal: 4), color: const Color(0xFF272A36)),
+                  Container(width: 1, height: 14, margin: const EdgeInsets.symmetric(horizontal: 6), color: Colors.white.withValues(alpha: 0.15)),
                   Expanded(
                     child: Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        const Icon(Icons.directions_bus_rounded, color: Color(0xFF3B82F6), size: 13),
-                        const SizedBox(width: 5),
+                        const Icon(Icons.directions_bus_rounded, color: Color(0xFF38BDF8), size: 14),
+                        const SizedBox(width: 6),
                         Flexible(
-                          child: FittedBox(
-                            fit: BoxFit.scaleDown,
-                            alignment: Alignment.centerLeft,
-                            child: Text(
-                              todayProgress.shuttleInfo,
-                              maxLines: 1,
-                              style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w600),
-                            ),
+                          child: Text(
+                            todayProgress.shuttleInfo,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w600),
                           ),
                         ),
                       ],
@@ -1825,24 +1626,76 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
     );
   }
 
-  Widget _buildQuickVardiyaTab(VardiyaGunu gun, String title) {
-    final isSelected = _selectedVardiya == gun;
+  // 🧠 VisionOS AI Super-Cockpit Adası
+  Widget _buildVisionAiSuperCockpit(ShiftType todayShift) {
+    return _buildVisionGlassContainer(
+      padding: EdgeInsets.zero,
+      borderRadius: 24,
+      child: Column(
+        children: [
+          // Segmented Tab Başlıkları (Spatial Floating Pills)
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              children: [
+                _buildVisionSegmentPill(0, '🏖️ ChronoPlan™', const Color(0xFF10B981)),
+                const SizedBox(width: 6),
+                _buildVisionSegmentPill(1, '🧬 Sirkadiyen', const Color(0xFF38BDF8)),
+                const SizedBox(width: 6),
+                _buildVisionSegmentPill(2, '🚀 NASA SAFTE™', const Color(0xFFF59E0B)),
+              ],
+            ),
+          ),
+
+          // Aktif Tab İçeriği
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16, top: 4),
+            child: _selectedAiTab == 0
+                ? _buildChronoPlanTabContent()
+                : (_selectedAiTab == 1
+                    ? _buildCircadianTabContent(todayShift)
+                    : _buildNasaSafteTabContent(todayShift)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVisionSegmentPill(int index, String title, Color activeColor) {
+    final isSelected = _selectedAiTab == index;
     return Expanded(
-      child: GestureDetector(
-        onTap: () => _changeVardiya(gun),
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
+      child: BouncyTap(
+        onTap: () {
+          setState(() => _selectedAiTab = index);
+          HapticFeedback.selectionClick();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
           decoration: BoxDecoration(
-            color: isSelected ? const Color(0xFFDC2626) : Colors.transparent,
-            borderRadius: BorderRadius.circular(12),
+            color: isSelected ? activeColor.withValues(alpha: 0.22) : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected ? activeColor.withValues(alpha: 0.8) : Colors.transparent,
+              width: 1.2,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(color: activeColor.withValues(alpha: 0.3), blurRadius: 10),
+                  ]
+                : null,
           ),
           child: Center(
-            child: Text(
-              title,
-              style: GoogleFonts.inter(
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.w900 : FontWeight.w600,
-                color: isSelected ? Colors.white : const Color(0xFFCBD5E1),
+            child: FittedBox(
+              fit: BoxFit.scaleDown,
+              child: Text(
+                title,
+                maxLines: 1,
+                style: GoogleFonts.inter(
+                  fontSize: 11,
+                  fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                  color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+                ),
               ),
             ),
           ),
@@ -1851,151 +1704,487 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
     );
   }
 
-  // ── 📊 fl_chart Aylık Analitik Kartı ──
-  Widget _buildMonthlyAnalyticsCard(int gunduz, int gece, int aksam, int tatil, int totalDays) {
-    int totalHours = (gunduz + gece + aksam) * 8;
+  // 🏖️ TAB 0: ChronoPlan™ AI Smart Leave & Bridge Optimizer
+  Widget _buildChronoPlanTabContent() {
+    final activeBridge = _getActiveBridgeForCurrentMonth();
 
-    List<PieChartSectionData> sections = [];
-    if (gunduz > 0) {
-      final isTouched = _touchedChartIndex == 0;
-      sections.add(PieChartSectionData(
-        color: const Color(0xFFF59E0B),
-        value: gunduz.toDouble(),
-        title: isTouched ? '${gunduz * 8}h' : '%${(gunduz / totalDays * 100).round()}',
-        radius: isTouched ? 38.0 : 30.0,
-        titleStyle: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-      ));
-    }
-    if (gece > 0) {
-      final isTouched = _touchedChartIndex == 1;
-      sections.add(PieChartSectionData(
-        color: const Color(0xFF3B82F6),
-        value: gece.toDouble(),
-        title: isTouched ? '${gece * 8}h' : '%${(gece / totalDays * 100).round()}',
-        radius: isTouched ? 38.0 : 30.0,
-        titleStyle: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-      ));
-    }
-    if (aksam > 0) {
-      final isTouched = _touchedChartIndex == 2;
-      sections.add(PieChartSectionData(
-        color: const Color(0xFF8B5CF6),
-        value: aksam.toDouble(),
-        title: isTouched ? '${aksam * 8}h' : '%${(aksam / totalDays * 100).round()}',
-        radius: isTouched ? 38.0 : 30.0,
-        titleStyle: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-      ));
-    }
-    if (tatil > 0) {
-      final isTouched = _touchedChartIndex == 3;
-      sections.add(PieChartSectionData(
-        color: const Color(0xFF10B981),
-        value: tatil.toDouble(),
-        title: isTouched ? '$tatil g' : '%${(tatil / totalDays * 100).round()}',
-        radius: isTouched ? 38.0 : 30.0,
-        titleStyle: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: Colors.white),
-      ));
-    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.auto_awesome_rounded, color: Color(0xFF10B981), size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'ChronoPlan™ AI İzin Analizi',
+                style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w800, color: const Color(0xFF10B981)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withValues(alpha: 0.22),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.45)),
+              ),
+              child: Text(
+                activeBridge.efficiencyBadge,
+                style: GoogleFonts.jetBrainsMono(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF34D399)),
+              ),
+            ),
+          ],
+        ),
 
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12141C),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF272A36)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                'Aylık Çalışma Dağılımı (fl_chart)',
-                style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
-              ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF1E212D),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Text(
-                  'Toplam $totalHours Saat',
-                  style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
-                ),
-              ),
-            ],
+        const SizedBox(height: 10),
+
+        Text(
+          activeBridge.title,
+          style: GoogleFonts.inter(fontSize: 14.5, fontWeight: FontWeight.w800, color: Colors.white),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          activeBridge.description,
+          style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1), height: 1.35),
+        ),
+
+        const SizedBox(height: 12),
+
+        // Köprüleme Karşılaştırma Kutusu
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
           ),
-
-          const SizedBox(height: 16),
-
-          Row(
+          child: Row(
             children: [
-              SizedBox(
-                width: 120,
-                height: 120,
-                child: PieChart(
-                  PieChartData(
-                    pieTouchData: PieTouchData(
-                      touchCallback: (FlTouchEvent event, pieTouchResponse) {
-                        setState(() {
-                          if (!event.isInterestedForInteractions ||
-                              pieTouchResponse == null ||
-                              pieTouchResponse.touchedSection == null) {
-                            _touchedChartIndex = -1;
-                            return;
-                          }
-                          _touchedChartIndex = pieTouchResponse.touchedSection!.touchedSectionIndex;
-                        });
-                      },
-                    ),
-                    borderData: FlBorderData(show: false),
-                    sectionsSpace: 2,
-                    centerSpaceRadius: 28,
-                    sections: sections,
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
               Expanded(
                 child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    _buildMiniLegend(const Color(0xFFF59E0B), 'Gündüz', '$gunduz Gün (${gunduz * 8}h)'),
-                    _buildMiniLegend(const Color(0xFF3B82F6), 'Gece', '$gece Gün (${gece * 8}h)'),
-                    _buildMiniLegend(const Color(0xFF8B5CF6), 'Akşam', '$aksam Gün (${aksam * 8}h)'),
-                    _buildMiniLegend(const Color(0xFF10B981), 'Tatil / İzin', '$tatil Gün Dinlenme'),
+                    Text('KULLANILAN İZİN', style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(activeBridge.leaveDaysText, style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w800, color: const Color(0xFFF59E0B))),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_rounded, color: Color(0xFF10B981), size: 18),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('KAZANILAN TATİL', style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 2),
+                    Text(activeBridge.totalOffDaysText, style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w800, color: const Color(0xFF10B981))),
                   ],
                 ),
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
+
+  // 🧬 TAB 1: Circadian Biological Alertness & Energy Heatmap
+  Widget _buildCircadianTabContent(ShiftType todayShift) {
+    int score = _getCircadianScore(todayShift);
+    Color scoreColor = _getCircadianColor(score);
+    String status = _getCircadianStatus(todayShift);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.biotech_rounded, color: Color(0xFF38BDF8), size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'Sirkadiyen Biyoritim Analizi',
+                style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w800, color: const Color(0xFF38BDF8)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+              decoration: BoxDecoration(
+                color: scoreColor.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: scoreColor.withValues(alpha: 0.35)),
+              ),
+              child: Text(
+                '%$score Uyanıklık',
+                style: GoogleFonts.jetBrainsMono(fontSize: 10.5, fontWeight: FontWeight.w800, color: scoreColor),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: LinearProgressIndicator(
+            value: score / 100.0,
+            minHeight: 6,
+            backgroundColor: Colors.white.withValues(alpha: 0.08),
+            valueColor: AlwaysStoppedAnimation<Color>(scoreColor),
+          ),
+        ),
+
+        const SizedBox(height: 10),
+
+        Text(
+          status,
+          style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.w700, color: Colors.white),
+        ),
+        const SizedBox(height: 3),
+        Text(
+          todayShift == ShiftType.gece
+              ? 'Gece vardiyasında saat 03:00 - 05:00 arası vücut sıcaklığı en düşük seviyededir. Kafein ve parlak ışık desteği tavsiye edilir.'
+              : (todayShift == ShiftType.tatil
+                  ? 'Kümülatif yorgunluğu sıfırlamak için 8+ saat uyku penceresi kullanın.'
+                  : 'Gündüz vardiyasında kortizol zirvesi ile reaksiyon süreniz maksimum seviyededir.'),
+          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8), height: 1.35),
+        ),
+      ],
+    );
+  }
+
+  // 🚀 TAB 2: NASA SAFTE™ Cognitive Engine & Rotation Radar
+  Widget _buildNasaSafteTabContent(ShiftType todayShift) {
+    final radar = _calculateRotationRadar();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.rocket_launch_rounded, color: Color(0xFFF59E0B), size: 16),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text(
+                'NASA SAFTE™ Kognitif Radar',
+                style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w800, color: const Color(0xFFF59E0B)),
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '242 ms Reaksiyon',
+                style: GoogleFonts.jetBrainsMono(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF34D399)),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        Row(
+          children: [
+            Expanded(
+              child: _buildRadarVisionMiniTile('🌙 Geceye', '${radar['daysToNight']} Gün', const Color(0xFF38BDF8)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildRadarVisionMiniTile('🏖️ İstirahate', '${radar['daysToRest']} Gün', const Color(0xFF10B981)),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: _buildRadarVisionMiniTile('🔄 Döngüye', '${radar['daysToRotation']} Gün', const Color(0xFFA78BFA)),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        Text(
+          '💡 Operasyonel Tavsiye: Gece vardiyası öncesindeki gün 14:00 - 15:30 arası 90 dk güç uykusu kümülatif uyku borcunu %70 azaltır.',
+          style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFFCBD5E1), height: 1.35),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildRadarVisionMiniTile(String label, String value, Color accentColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w600)),
+          const SizedBox(height: 2),
+          Text(value, style: GoogleFonts.jetBrainsMono(fontSize: 13, fontWeight: FontWeight.w800, color: accentColor)),
         ],
       ),
     );
   }
 
-  Widget _buildMiniLegend(Color color, String title, String val) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 3.0),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  // 📅 VisionOS Spatial Takvim Izgarası
+  Widget _buildVisionSpatialCalendar(
+    List<String> months,
+    List<String> daysOfWeek,
+    int emptySlots,
+    int daysInMonth,
+    int gunduzCount,
+    int geceCount,
+    int aksamCount,
+    int izinCount,
+  ) {
+    return _buildVisionGlassContainer(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 26,
+      child: Column(
         children: [
+          // Ay Navigasyonu & 'Bugün' Neon Rozeti
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Container(width: 8, height: 8, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-              const SizedBox(width: 8),
-              Text(title, style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w600)),
+              _buildVisionIconButton(
+                icon: Icons.chevron_left_rounded,
+                onTap: _previousMonth,
+                iconSize: 20,
+              ),
+              Row(
+                children: [
+                  const Icon(Icons.calendar_today_rounded, color: Color(0xFF38BDF8), size: 16),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${months[_currentMonth.month]} ${_currentMonth.year}',
+                    style: GoogleFonts.inter(fontSize: 16.5, fontWeight: FontWeight.w800, color: Colors.white),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  _buildVisionIconButton(
+                    icon: Icons.chevron_right_rounded,
+                    onTap: _nextMonth,
+                    iconSize: 20,
+                  ),
+                  const SizedBox(width: 8),
+                  BouncyTap(
+                    onTap: _goToToday,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6.5),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF0284C7), Color(0xFF0369A1)],
+                        ),
+                        borderRadius: BorderRadius.circular(14),
+                        boxShadow: [
+                          BoxShadow(color: const Color(0xFF0284C7).withValues(alpha: 0.45), blurRadius: 10),
+                        ],
+                      ),
+                      child: Text(
+                        'Bugün',
+                        style: GoogleFonts.inter(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ],
           ),
-          Text(val, style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w500)),
+
+          const SizedBox(height: 14),
+
+          // Hafta Gün Başlıkları
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceAround,
+            children: List.generate(7, (index) {
+              bool isTodayWeekday = _today.weekday - 1 == index &&
+                  _currentMonth.month == _today.month &&
+                  _currentMonth.year == _today.year;
+              return SizedBox(
+                width: 36,
+                child: Text(
+                  daysOfWeek[index],
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: isTodayWeekday ? const Color(0xFF38BDF8) : const Color(0xFF64748B),
+                  ),
+                ),
+              );
+            }),
+          ),
+
+          const SizedBox(height: 8),
+
+          // 7x5 Ay Gün Matrisi (VisionOS Spatial Grid)
+          GridView.builder(
+            padding: EdgeInsets.zero,
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 7,
+              childAspectRatio: 0.90,
+              mainAxisSpacing: 6,
+              crossAxisSpacing: 6,
+            ),
+            itemCount: emptySlots + daysInMonth,
+            itemBuilder: (context, index) {
+              if (index < emptySlots) return const SizedBox();
+
+              int day = index - emptySlots + 1;
+              DateTime date = DateTime(_currentMonth.year, _currentMonth.month, day);
+              bool isToday = date.year == _today.year && date.month == _today.month && date.day == _today.day;
+              bool isSelected = date.year == _selectedDay.year && date.month == _selectedDay.month && date.day == _selectedDay.day;
+
+              ShiftType shift = ShiftLogic.getShiftType(date, vardiyaGunu: _selectedVardiya);
+              Color shiftColor = _getShiftColor(shift);
+              String? bayram = HolidayLogic.getHolidayName(date);
+              bool isBridgeDay = _isAiBridgeDate(date);
+              int circadianScore = _getCircadianScore(shift);
+              Color circadianDotColor = _getCircadianColor(circadianScore);
+
+              bool isDimmed = _filterShiftType != null && _filterShiftType != shift;
+              double cellOpacity = isDimmed ? 0.20 : 1.0;
+
+              Color bgColor = isSelected
+                  ? (isToday ? const Color(0xFF0284C7) : shiftColor.withValues(alpha: 0.35))
+                  : (isToday ? const Color(0xFF0284C7).withValues(alpha: 0.85) : shiftColor.withValues(alpha: 0.09));
+
+              Color textColor = isToday || isSelected ? Colors.white : shiftColor;
+
+              return Opacity(
+                opacity: cellOpacity,
+                child: BouncyTap(
+                  onTap: () {
+                    setState(() => _selectedDay = date);
+                    HapticFeedback.selectionClick();
+                  },
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    decoration: BoxDecoration(
+                      color: bgColor,
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: isSelected
+                            ? (isToday ? Colors.white : shiftColor)
+                            : (isToday
+                                ? const Color(0xFF38BDF8)
+                                : (bayram != null
+                                    ? const Color(0xFFF59E0B).withValues(alpha: 0.6)
+                                    : (isBridgeDay ? const Color(0xFF10B981).withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.05)))),
+                        width: isSelected ? 2.0 : 1.0,
+                      ),
+                      boxShadow: isSelected
+                          ? [
+                              BoxShadow(
+                                color: (isToday ? const Color(0xFF0284C7) : shiftColor).withValues(alpha: 0.45),
+                                blurRadius: 12,
+                                spreadRadius: 1,
+                              )
+                            ]
+                          : null,
+                    ),
+                    child: Stack(
+                      alignment: Alignment.center,
+                      children: [
+                        Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              day.toString(),
+                              style: GoogleFonts.inter(
+                                fontSize: 14.5,
+                                fontWeight: FontWeight.w800,
+                                color: textColor,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            // Sirkadiyen Biyoritim Mikro Noktası
+                            Container(
+                              width: 5,
+                              height: 5,
+                              decoration: BoxDecoration(
+                                color: isSelected || isToday ? Colors.white : circadianDotColor,
+                                shape: BoxShape.circle,
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: circadianDotColor.withValues(alpha: 0.5),
+                                    blurRadius: 4,
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        // Bayram / AI İzin Rozeti
+                        if (bayram != null)
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            child: const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 11),
+                          )
+                        else if (isBridgeDay)
+                          Positioned(
+                            top: 2,
+                            right: 2,
+                            child: Container(
+                              width: 5,
+                              height: 5,
+                              decoration: const BoxDecoration(
+                                color: Color(0xFF10B981),
+                                shape: BoxShape.circle,
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+
+          const SizedBox(height: 16),
+
+          // 📊 VisionOS Bento Shift Matrix (Filtreleme & Aylık Özet)
+          _buildVisionBentoShiftMatrix(gunduzCount, geceCount, aksamCount, izinCount),
         ],
       ),
     );
   }
 
-  Widget _buildFilterPill(String label, int count, Color color, ShiftType type) {
+  // 📊 VisionOS Bento Shift Matrix
+  Widget _buildVisionBentoShiftMatrix(int gunduz, int gece, int aksam, int tatil) {
+    return Row(
+      children: [
+        Expanded(child: _buildVisionBentoPill('Gündüz', gunduz, const Color(0xFFF59E0B), ShiftType.sabah)),
+        const SizedBox(width: 6),
+        Expanded(child: _buildVisionBentoPill('Gece', gece, const Color(0xFF38BDF8), ShiftType.gece)),
+        const SizedBox(width: 6),
+        Expanded(child: _buildVisionBentoPill('Akşam', aksam, const Color(0xFFA78BFA), ShiftType.aksam)),
+        const SizedBox(width: 6),
+        Expanded(child: _buildVisionBentoPill('İzin', tatil, const Color(0xFF10B981), ShiftType.tatil)),
+      ],
+    );
+  }
+
+  Widget _buildVisionBentoPill(String label, int count, Color color, ShiftType type) {
     final bool isFiltered = _filterShiftType == type;
+
     return BouncyTap(
       onTap: () {
         setState(() {
@@ -2008,33 +2197,35 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
         HapticFeedback.selectionClick();
       },
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 6),
         decoration: BoxDecoration(
-          color: isFiltered ? color.withValues(alpha: 0.25) : color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(16),
+          color: isFiltered ? color.withValues(alpha: 0.28) : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(14),
           border: Border.all(
-            color: isFiltered ? color : color.withValues(alpha: 0.3),
+            color: isFiltered ? color : Colors.white.withValues(alpha: 0.12),
             width: isFiltered ? 1.6 : 1.0,
           ),
           boxShadow: isFiltered
-              ? [BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 8, spreadRadius: 1)]
+              ? [BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 10)]
               : null,
         ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
+        child: Column(
           children: [
-            Container(
-              width: 6,
-              height: 6,
-              decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-            ),
-            const SizedBox(width: 5),
             Text(
-              '$label ($count)',
+              label,
               style: GoogleFonts.inter(
-                fontSize: 11,
-                fontWeight: isFiltered ? FontWeight.bold : FontWeight.w600,
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+                color: isFiltered ? Colors.white : const Color(0xFF94A3B8),
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '$count g',
+              style: GoogleFonts.jetBrainsMono(
+                fontSize: 13,
+                fontWeight: FontWeight.w800,
                 color: isFiltered ? Colors.white : color,
               ),
             ),
@@ -2044,46 +2235,282 @@ class _VardiyaScreenState extends State<VardiyaScreen> {
     );
   }
 
-  Widget _buildGuideCard(ShiftType type, String time, String breakTime, String shuttle) {
-    Color color = _getShiftColor(type);
+  // 🎯 VisionOS Seçilen Gün Detay Kartı
+  Widget _buildVisionSelectedDayCard(ShiftType selectedShift, Color selectedColor, bool isSelectedToday, String? holidayName) {
+    final months = ['', 'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran', 'Temmuz', 'Ağustos', 'Eylül', 'Ekim', 'Kasım', 'Aralık'];
+    int circadianScore = _getCircadianScore(selectedShift);
+    Color circadianColor = _getCircadianColor(circadianScore);
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF272A36)),
-      ),
+    return _buildVisionGlassContainer(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 24,
+      borderColor: isSelectedToday ? selectedColor.withValues(alpha: 0.6) : Colors.white.withValues(alpha: 0.14),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(_getShiftIcon(type), color: color, size: 22),
               Container(
-                width: 6,
-                height: 6,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+                width: 46,
+                height: 46,
+                decoration: BoxDecoration(
+                  color: selectedColor.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: selectedColor.withValues(alpha: 0.4)),
+                ),
+                child: Icon(_getShiftIcon(selectedShift), color: selectedColor, size: 24),
               ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          _getShiftName(selectedShift),
+                          style: GoogleFonts.inter(fontSize: 15.5, fontWeight: FontWeight.w800, color: Colors.white),
+                        ),
+                        if (isSelectedToday) ...[
+                          const SizedBox(width: 8),
+                          _buildVisionPillBadge('BUGÜN', const Color(0xFF38BDF8)),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Text(
+                          '${_selectedDay.day} ${months[_selectedDay.month]} ${_selectedDay.year}',
+                          style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w500),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            _getShiftTime(selectedShift),
+                            style: GoogleFonts.jetBrainsMono(fontSize: 10.5, fontWeight: FontWeight.bold, color: const Color(0xFFCBD5E1)),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              if (!isSelectedToday)
+                _buildVisionIconButton(
+                  icon: Icons.replay_rounded,
+                  onTap: _goToToday,
+                  iconSize: 16,
+                ),
             ],
           ),
-          const SizedBox(height: 10),
-          Text(
-            _getShiftName(type),
-            style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.bold, color: Colors.white),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            time,
-            style: GoogleFonts.inter(fontSize: 11, color: color, fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 8),
-          const Divider(height: 1, color: Color(0xFF272A36)),
-          const SizedBox(height: 8),
-          Text('☕ $breakTime', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8))),
-          Text('🚌 $shuttle', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8))),
+
+          if (holidayName != null) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.35)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.star_rounded, color: Color(0xFFF59E0B), size: 16),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      holidayName,
+                      style: GoogleFonts.inter(color: const Color(0xFFFCD34D), fontSize: 11.5, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+
+          if (selectedShift != ShiftType.tatil) ...[
+            const SizedBox(height: 10),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(9),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.coffee_rounded, size: 13, color: Color(0xFFF59E0B)),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Mola: ${ShiftLogic.getBreakTime(selectedShift)}',
+                            style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w600),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.all(9),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.biotech_rounded, size: 13, color: circadianColor),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            'Sirkadiyen: %$circadianScore',
+                            style: GoogleFonts.jetBrainsMono(fontSize: 10.5, color: circadianColor, fontWeight: FontWeight.bold),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
         ],
+      ),
+    );
+  }
+
+  // 📄 VisionOS A4 Vardiya Cetveli Hızlı Paylaşım Barı
+  Widget _buildVisionPdfShareActionBar() {
+    return BouncyTap(
+      onTap: _isGeneratingPdf ? null : _generateAndShareVardiyaPdf,
+      child: _buildVisionGlassContainer(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        borderRadius: 22,
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0284C7).withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.45)),
+              ),
+              child: _isGeneratingPdf
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFF38BDF8), size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Aylık Vardiya Cetveli (Resmi A4 PDF)',
+                    style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'İSDEMİR formatında indir, yazdır veya WhatsApp ile paylaş',
+                    style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8)),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.share_rounded, color: Color(0xFF38BDF8), size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 💎 VISIONOS YARDIMCI BİLEŞENLERİ ──
+
+  // Gerçek Apple VisionOS Buzlu Cam Konteyneri (60/120 FPS Buttery Smooth)
+  Widget _buildVisionGlassContainer({
+    required Widget child,
+    EdgeInsetsGeometry? padding = const EdgeInsets.all(16),
+    double borderRadius = 22,
+    Color? borderColor,
+  }) {
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF131826).withValues(alpha: 0.82),
+            const Color(0xFF0B0F19).withValues(alpha: 0.90),
+          ],
+        ),
+        border: Border.all(
+          color: borderColor ?? Colors.white.withValues(alpha: 0.14),
+          width: 1.1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  // VisionOS İkon Butonu
+  Widget _buildVisionIconButton({
+    required IconData icon,
+    VoidCallback? onTap,
+    double iconSize = 18,
+    bool isLoading = false,
+  }) {
+    return BouncyTap(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1B2332).withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        ),
+        child: isLoading
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+            : Icon(icon, color: Colors.white, size: iconSize),
+      ),
+    );
+  }
+
+  // VisionOS Mini Rozet
+  Widget _buildVisionPillBadge(String text, Color accentColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: accentColor.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accentColor.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        text,
+        style: GoogleFonts.jetBrainsMono(
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+          color: accentColor,
+        ),
       ),
     );
   }

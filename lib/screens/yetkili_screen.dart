@@ -9,6 +9,7 @@ import 'package:fl_chart/fl_chart.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:open_filex/open_filex.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/user_model.dart';
 import '../utils/shift_logic.dart';
@@ -31,7 +32,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
   List<Map<String, dynamic>> _duyurular = [];
   List<Map<String, dynamic>> _swapRequests = [];
   String _searchQuery = '';
-  String _filterType = 'all'; // 'all', 'onayli', 'yetkili', 'vip', 'bekleyen'
+  String _filterType = 'all'; // 'all', 'onayli', 'yetkili', 'vip', 'bekleyen', 'v10', 'eski'
   bool _isExportingExcel = false;
   bool _showAnalyticsCharts = true;
 
@@ -41,12 +42,23 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
   bool _duyuruIsAlert = false;
   bool _isSendingDuyuru = false;
 
+  // Command Center Color System
+  static const Color obsidianBg = Color(0xFF080B11);
+  static const Color cardSurface = Color(0xFF0F141E);
+  static const Color cardSurfaceElevated = Color(0xFF161C2B);
+  static const Color cardBorder = Color(0xFF222B3D);
+  static const Color laserCrimson = Color(0xFFEF4444);
+  static const Color cyberCyan = Color(0xFF06B6D4);
+  static const Color neonEmerald = Color(0xFF10B981);
+  static const Color amberGold = Color(0xFFF59E0B);
+  static const Color electricViolet = Color(0xFF8B5CF6);
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 4, vsync: this);
     _tabController.addListener(() {
-      setState(() {});
+      if (mounted) setState(() {});
     });
     _fetchData();
   }
@@ -60,6 +72,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
   }
 
   Future<void> _fetchData() async {
+    if (!mounted) return;
     setState(() {
       _isLoading = true;
       _error = '';
@@ -90,21 +103,25 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
         personellerList.add(data);
       }
 
-      final duyurularSnapshot = await FirebaseFirestore.instance
-          .collection('duyurular')
-          .orderBy('tarih', descending: true)
-          .get();
+      List<Map<String, dynamic>> duyurularList = [];
+      try {
+        final duyurularSnapshot = await FirebaseFirestore.instance
+            .collection('duyurular')
+            .orderBy('tarih', descending: true)
+            .get();
 
-      final duyurularList = duyurularSnapshot.docs.map((doc) {
-        var data = doc.data();
-        data['id'] = doc.id;
-        if (data['tarih'] is Timestamp) {
-          data['tarih'] = (data['tarih'] as Timestamp).toDate().toIso8601String();
-        }
-        return data;
-      }).toList();
+        duyurularList = duyurularSnapshot.docs.map((doc) {
+          var data = doc.data();
+          data['id'] = doc.id;
+          if (data['tarih'] is Timestamp) {
+            data['tarih'] = (data['tarih'] as Timestamp).toDate().toIso8601String();
+          }
+          return data;
+        }).toList();
+      } catch (de) {
+        debugPrint('Duyurular çekme uyarısı: $de');
+      }
 
-      // Vardiya takas taleplerini çek
       List<Map<String, dynamic>> swapList = [];
       try {
         final swapSnapshot = await FirebaseFirestore.instance
@@ -120,7 +137,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
           swapList.add(data);
         }
       } catch (e) {
-        debugPrint('Vardiya takas verisi çekme: $e');
+        debugPrint('Vardiya takas verisi çekme hatası: $e');
       }
 
       if (mounted) {
@@ -134,7 +151,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     } catch (e) {
       if (mounted) {
         setState(() {
-          _error = 'Veri çekilirken hata oluştu: $e';
+          if (e.toString().contains('permission-denied')) {
+            _error = 'Firestore Güvenlik Kuralları Erişimi Engelliyor.\nKurallar güncellendi, lütfen "Tekrar Dene" butonuna dokunarak yeniden bağlanın.';
+          } else {
+            _error = 'Veri çekilirken hata oluştu: $e';
+          }
           _isLoading = false;
         });
       }
@@ -145,16 +166,17 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     try {
       await FirebaseFirestore.instance.collection('personeller').doc(id).update({'durum': newStatus});
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(newStatus == 'onaylandi' ? '✅ Personel başarıyla onaylandı.' : 'Personel kaydı reddedildi.'),
-          backgroundColor: newStatus == 'onaylandi' ? const Color(0xFF10B981) : const Color(0xFFEF4444),
-        ),
+
+      _showExecutiveSnackBar(
+        title: newStatus == 'onaylandi' ? 'Personel Hesabı Onaylandı' : 'Personel Başvurusu Reddedildi',
+        message: newStatus == 'onaylandi' ? 'Kullanıcı artık tam yetkiyle sisteme erişebilir.' : 'İşlem kayıtlara işlendi.',
+        color: newStatus == 'onaylandi' ? neonEmerald : laserCrimson,
+        icon: newStatus == 'onaylandi' ? Icons.check_circle_rounded : Icons.cancel_rounded,
       );
       _fetchData();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      _showExecutiveSnackBar(title: 'İşlem Hatası', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
     }
   }
 
@@ -166,16 +188,17 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
         'yetkili': newStatus,
       });
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(newStatus ? '🛡️ Yetkili yetkisi tanımlandı.' : 'Yetkili yetkisi geri alındı.'),
-          backgroundColor: newStatus ? const Color(0xFFDC2626) : const Color(0xFF64748B),
-        ),
+
+      _showExecutiveSnackBar(
+        title: newStatus ? 'Yönetici Yetkisi Verildi' : 'Yönetici Yetkisi Kaldırıldı',
+        message: newStatus ? 'Personel artık operasyon komuta merkezini yönetebilir.' : 'Standart personel seviyesine çekildi.',
+        color: newStatus ? laserCrimson : const Color(0xFF64748B),
+        icon: Icons.shield_rounded,
       );
       _fetchData();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      _showExecutiveSnackBar(title: 'Hata', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
     }
   }
 
@@ -183,41 +206,64 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     try {
       final newStatus = !currentStatus;
       await FirebaseFirestore.instance.collection('personeller').doc(id).update({'is_vip': newStatus});
-      
-      // VIP yetkisi verildiğinde kullanıcıya OneSignal push bildirimi gönder
+
       if (newStatus && cihazId != null && cihazId.isNotEmpty) {
-        await PushService.sendPushNotification(
-          title: '👑 VIP Yetkiniz Tanımlandı!',
-          content: 'Tebrikler ${name ?? ''}! Operasyon merkezi tarafından hesabınıza VIP yetkisi verildi. Posta listesi ve operasyonel modüllere erişebilirsiniz.',
-          targetCihazId: cihazId,
-        );
+        try {
+          await PushService.sendPushNotification(
+            title: '👑 VIP Yetkiniz Tanımlandı!',
+            content: 'Tebrikler ${name ?? ''}! Operasyon merkezi tarafından hesabınıza VIP yetkisi tanımlandı.',
+            targetCihazId: cihazId,
+          );
+        } catch (_) {}
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Row(
-            children: [
-              Icon(newStatus ? Icons.star_rounded : Icons.star_border_rounded, color: Colors.white, size: 18),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(newStatus ? '⭐ ${name ?? 'Personele'} VIP Yetkisi Verildi (Bildirim İletildi).' : 'VIP Yetkisi Geri Alındı.'),
-              ),
-            ],
-          ),
-          backgroundColor: newStatus ? const Color(0xFFF59E0B) : const Color(0xFF64748B),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-        ),
+      _showExecutiveSnackBar(
+        title: newStatus ? '👑 VIP Statüsü Verildi' : 'VIP Statüsü Kaldırıldı',
+        message: newStatus ? '${name ?? 'Personel'} için anlık push bildirimi iletildi.' : 'VIP erişimi kapatıldı.',
+        color: newStatus ? amberGold : const Color(0xFF64748B),
+        icon: Icons.star_rounded,
       );
       _fetchData();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      _showExecutiveSnackBar(title: 'Hata', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
     }
   }
 
-  // ── 📑 2. TEK TIKLA EXCEL / PUANTAJ RAPORU İNDİRME ──
+  void _showExecutiveSnackBar({required String title, required String message, required Color color, required IconData icon}) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: cardSurfaceElevated,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14), side: BorderSide(color: color.withValues(alpha: 0.5))),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        content: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.15), shape: BoxShape.circle),
+              child: Icon(icon, color: color, size: 20),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(title, style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                  Text(message, style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 11.5)),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 📑 EXCEL / PUANTAJ RAPORU İNDİRME ──
   Future<void> _exportPersonnelToExcel() async {
     if (_isExportingExcel) return;
     setState(() => _isExportingExcel = true);
@@ -225,7 +271,6 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
 
     try {
       final buffer = StringBuffer();
-      // CSV Başlık Satırı
       buffer.writeln('Sıra;Ad Soyad;Meslek;Vardiya Postası;Sistem Durumu;Saha Durumu;Taban Maaş (TL);Normal Mesai (Gün);Bayram Mesaisi (Gün);Toplam Hakediş (TL);Son Turnike Hareketi;VIP Yetkisi;Yönetici Yetkisi');
 
       int index = 1;
@@ -263,35 +308,32 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
       final filePath = '${tempDir.path}/isdemir_personel_puantaj_$nowStr.csv';
       final file = File(filePath);
 
-      // Türkçe karakterlerin Excel'de bozulmaması için UTF-8 BOM ekliyoruz
       final utf8Bom = [0xEF, 0xBB, 0xBF];
       await file.writeAsBytes([...utf8Bom, ...utf8.encode(buffer.toString())]);
 
       setState(() => _isExportingExcel = false);
-
       if (!mounted) return;
 
-      // Kullanıcıya paylaşma veya açma menüsü göster
       showModalBottomSheet(
         context: context,
         backgroundColor: Colors.transparent,
         builder: (ctx) => Container(
           padding: const EdgeInsets.all(24),
           decoration: const BoxDecoration(
-            color: Color(0xFF141722),
+            color: cardSurface,
             borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-            border: Border(top: BorderSide(color: Color(0xFF10B981), width: 2)),
+            border: Border(top: BorderSide(color: neonEmerald, width: 2)),
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                padding: const EdgeInsets.all(14),
+                padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                  color: neonEmerald.withValues(alpha: 0.15),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.table_view_rounded, color: Color(0xFF10B981), size: 36),
+                child: const Icon(Icons.table_chart_rounded, color: neonEmerald, size: 36),
               ),
               const SizedBox(height: 14),
               Text(
@@ -300,7 +342,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
               ),
               const SizedBox(height: 6),
               Text(
-                '${_personeller.length} personelin tüm puantaj, maaş, vardiya ve turnike verileri Excel uyumlu (.csv) dosyası olarak hazırlandı.',
+                '${_personeller.length} personelin tüm puantaj, maaş, vardiya ve turnike verileri Excel uyumlu (.csv) dosyası olarak dışa aktarıldı.',
                 textAlign: TextAlign.center,
                 style: GoogleFonts.inter(fontSize: 12.5, color: const Color(0xFF94A3B8)),
               ),
@@ -317,7 +359,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                       label: const Text('Dosyayı Aç'),
                       style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white,
-                        side: const BorderSide(color: Color(0xFF334155)),
+                        side: const BorderSide(color: cardBorder),
                         padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
@@ -338,8 +380,8 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                       icon: const Icon(Icons.share_rounded, size: 16),
                       label: const Text('Paylaş / Gönder'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF10B981),
-                        foregroundColor: Colors.white,
+                        backgroundColor: neonEmerald,
+                        foregroundColor: Colors.black,
                         padding: const EdgeInsets.symmetric(vertical: 13),
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                       ),
@@ -354,9 +396,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     } catch (e) {
       setState(() => _isExportingExcel = false);
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Rapor oluşturma hatası: $e'), backgroundColor: Colors.red),
-        );
+        _showExecutiveSnackBar(title: 'Rapor Hatası', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
       }
     }
   }
@@ -366,9 +406,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     final content = _duyuruContentCtrl.text.trim();
 
     if (title.isEmpty || content.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Lütfen başlık ve içerik alanlarını doldurun.')),
-      );
+      _showExecutiveSnackBar(title: 'Eksik Bilgi', message: 'Lütfen duyuru başlığını ve mesajını giriniz.', color: amberGold, icon: Icons.warning_amber_rounded);
       return;
     }
 
@@ -383,7 +421,6 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
         'yayinlayan': widget.currentUser.fullName,
       });
 
-      // OneSignal Push Bildirimi Yayınla
       await PushService.sendPushNotification(
         title: _duyuruIsAlert ? '🚨 [ACİL AMİR DUYURUSU] $title' : '📢 [YETKİLİ DUYURU] $title',
         content: content,
@@ -399,11 +436,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
           _isSendingDuyuru = false;
         });
 
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('📢 Duyuru panoya eklendi ve tüm personele push bildirim gönderildi!'),
-            backgroundColor: Color(0xFF10B981),
-          ),
+        _showExecutiveSnackBar(
+          title: 'Duyuru Yayınlandı',
+          message: 'Tüm personele OneSignal anlık bildirimi iletildi.',
+          color: neonEmerald,
+          icon: Icons.campaign_rounded,
         );
       }
 
@@ -411,7 +448,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     } catch (e) {
       if (mounted) {
         setState(() => _isSendingDuyuru = false);
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Duyuru gönderim hatası: $e')));
+        _showExecutiveSnackBar(title: 'Gönderim Hatası', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
       }
     }
   }
@@ -420,11 +457,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     try {
       await FirebaseFirestore.instance.collection('duyurular').doc(id).delete();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Duyuru kaldırıldı.')));
+      _showExecutiveSnackBar(title: 'Duyuru Kaldırıldı', message: 'Duyuru panodan silindi.', color: const Color(0xFF64748B), icon: Icons.delete_outline_rounded);
       _fetchData();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+      _showExecutiveSnackBar(title: 'Hata', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
     }
   }
 
@@ -444,7 +481,6 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     return initials.isEmpty ? "P" : initials;
   }
 
-  // Vardiya Adı ve Canlı Durumu
   Map<String, String> _getVardiyaInfo(String? vardiyaStr) {
     VardiyaGunu gun = VardiyaGunu.sali;
     String name = 'Salı Vardiyası (Salı Tatil)';
@@ -476,7 +512,6 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     final pendingSwapCount = _swapRequests.where((s) => s['durum'] == 'onay_bekliyor').length;
     final totalPersonnel = _personeller.length;
 
-    // Toplam Hakediş Havuzu
     double totalHakedisPool = 0;
     for (var p in _personeller) {
       final String meslek = p['meslek'] ?? 'Liman İşçisi A';
@@ -488,131 +523,252 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     }
 
     return Scaffold(
-      backgroundColor: const Color(0xFF090A0F),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF0F1118),
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      backgroundColor: obsidianBg,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
           children: [
-            Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFDC2626).withValues(alpha: 0.2),
-                    borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.6)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.shield_rounded, color: Color(0xFFDC2626), size: 12),
-                      const SizedBox(width: 4),
-                      Text('YETKİLİ', style: GoogleFonts.inter(color: const Color(0xFFDC2626), fontSize: 10, fontWeight: FontWeight.w900)),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Text('Operasyon Merkezi', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white)),
-              ],
-            ),
-            Text(
-              'Yetkili: ${widget.currentUser.fullName}',
-              style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
-            ),
-          ],
-        ),
-        actions: [
-          IconButton(
-            icon: _isExportingExcel
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF10B981)),
-                  )
-                : const Icon(Icons.table_view_rounded, color: Color(0xFF10B981)),
-            onPressed: _exportPersonnelToExcel,
-            tooltip: 'Excel Puantaj Raporu İndir',
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white70),
-            onPressed: _fetchData,
-            tooltip: 'Yenile',
-          ),
-        ],
-        bottom: TabBar(
-          controller: _tabController,
-          indicatorColor: const Color(0xFFDC2626),
-          indicatorWeight: 3,
-          labelColor: Colors.white,
-          unselectedLabelColor: const Color(0xFF64748B),
-          labelStyle: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold),
-          tabs: [
-            const Tab(
-              icon: Icon(Icons.people_alt_rounded, size: 18),
-              text: 'Personel & Maaş',
-            ),
-            Tab(
-              icon: Badge(
-                isLabelVisible: pendingCount > 0,
-                label: Text('$pendingCount'),
-                backgroundColor: const Color(0xFFDC2626),
-                child: const Icon(Icons.pending_actions_rounded, size: 18),
-              ),
-              text: 'Bekleyen ($pendingCount)',
-            ),
-            Tab(
-              icon: Badge(
-                isLabelVisible: pendingSwapCount > 0,
-                label: Text('$pendingSwapCount'),
-                backgroundColor: const Color(0xFFF59E0B),
-                child: const Icon(Icons.swap_horizontal_circle_rounded, size: 18),
-              ),
-              text: 'Vardiya Takas ($pendingSwapCount)',
-            ),
-            const Tab(
-              icon: Icon(Icons.campaign_rounded, size: 18),
-              text: 'Duyuru Yayınla',
+            // ── Modern Executive Frosted App Bar ──
+            _buildExecutiveHeader(),
+
+            // ── Modern Floating Segmented Tabs ──
+            _buildModernSegmentedTabs(pendingCount, pendingSwapCount),
+
+            // ── Content Area ──
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator(color: laserCrimson))
+                  : _error.isNotEmpty
+                      ? Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24.0),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.error_outline_rounded, color: laserCrimson, size: 48),
+                                const SizedBox(height: 12),
+                                Text(_error, textAlign: TextAlign.center, style: GoogleFonts.inter(color: Colors.white70)),
+                                const SizedBox(height: 16),
+                                ElevatedButton(onPressed: _fetchData, child: const Text('Tekrar Dene')),
+                              ],
+                            ),
+                          ),
+                        )
+                      : TabBarView(
+                          controller: _tabController,
+                          children: [
+                            _buildPersonnelAndSalaryTab(totalPersonnel, pendingCount, totalHakedisPool),
+                            _buildPendingApprovalsTab(),
+                            _buildSwapRequestsTab(),
+                            _buildAnnouncementsTab(),
+                          ],
+                        ),
             ),
           ],
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFFDC2626)))
-          : _error.isNotEmpty
-              ? Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        const Icon(Icons.error_outline_rounded, color: Colors.red, size: 48),
-                        const SizedBox(height: 12),
-                        Text(_error, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white70)),
-                        const SizedBox(height: 16),
-                        ElevatedButton(onPressed: _fetchData, child: const Text('Tekrar Dene')),
-                      ],
-                    ),
-                  ),
-                )
-              : TabBarView(
-                  controller: _tabController,
-                  children: [
-                    _buildPersonnelAndSalaryTab(totalPersonnel, pendingCount, totalHakedisPool),
-                    _buildPendingApprovalsTab(),
-                    _buildSwapRequestsTab(),
-                    _buildAnnouncementsTab(),
-                  ],
-                ),
     );
   }
 
-  // ── 👥 SEKME 1: PERSONEL & MAAŞ & MESAİ & VARDİYA & GİRİŞ-ÇIKIŞ ──
+  // ── High-Tech Executive Command Header ──
+  Widget _buildExecutiveHeader() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(16, 10, 16, 8),
+      decoration: const BoxDecoration(
+        color: cardSurface,
+        border: Border(bottom: BorderSide(color: cardBorder, width: 0.8)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              // Glass Back Button
+              InkWell(
+                onTap: () => Navigator.pop(context),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: cardSurfaceElevated,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: cardBorder),
+                  ),
+                  child: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 16),
+                ),
+              ),
+
+              const SizedBox(width: 12),
+
+              // Title and Status
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: const BoxDecoration(
+                            color: neonEmerald,
+                            shape: BoxShape.circle,
+                            boxShadow: [
+                              BoxShadow(color: neonEmerald, blurRadius: 6, spreadRadius: 1),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          'OPERASYON KOMUTA KONSOLU',
+                          style: GoogleFonts.inter(
+                            fontSize: 10,
+                            letterSpacing: 1.2,
+                            fontWeight: FontWeight.w900,
+                            color: laserCrimson,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Yetkili: ${widget.currentUser.fullName}',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+
+              // Action Buttons
+              Row(
+                children: [
+                  // Excel Button
+                  InkWell(
+                    onTap: _exportPersonnelToExcel,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                      decoration: BoxDecoration(
+                        color: neonEmerald.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: neonEmerald.withValues(alpha: 0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          _isExportingExcel
+                              ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2, color: neonEmerald))
+                              : const Icon(Icons.table_chart_rounded, color: neonEmerald, size: 15),
+                          const SizedBox(width: 5),
+                          Text(
+                            'Puantaj',
+                            style: GoogleFonts.inter(color: neonEmerald, fontSize: 11.5, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  // Refresh Button
+                  InkWell(
+                    onTap: _fetchData,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: cardSurfaceElevated,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: cardBorder),
+                      ),
+                      child: const Icon(Icons.refresh_rounded, color: Color(0xFF94A3B8), size: 18),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Modern Floating Segmented Tabs ──
+  Widget _buildModernSegmentedTabs(int pendingCount, int pendingSwapCount) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 6),
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: cardSurface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: cardBorder, width: 0.8),
+      ),
+      child: TabBar(
+        controller: _tabController,
+        dividerColor: Colors.transparent,
+        indicatorSize: TabBarIndicatorSize.tab,
+        indicator: BoxDecoration(
+          color: laserCrimson,
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [
+            BoxShadow(color: laserCrimson.withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 2)),
+          ],
+        ),
+        labelColor: Colors.white,
+        unselectedLabelColor: const Color(0xFF8E9EB5),
+        labelPadding: EdgeInsets.zero,
+        tabs: [
+          _buildSegmentTabItem(icon: Icons.people_alt_rounded, text: 'Personel'),
+          _buildSegmentTabItem(
+            icon: Icons.pending_actions_rounded,
+            text: 'Onaylar',
+            badgeCount: pendingCount,
+            badgeColor: amberGold,
+          ),
+          _buildSegmentTabItem(
+            icon: Icons.swap_calls_rounded,
+            text: 'Takas',
+            badgeCount: pendingSwapCount,
+            badgeColor: cyberCyan,
+          ),
+          _buildSegmentTabItem(icon: Icons.campaign_rounded, text: 'Duyuru'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSegmentTabItem({required IconData icon, required String text, int badgeCount = 0, Color badgeColor = laserCrimson}) {
+    return Tab(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon, size: 15),
+          const SizedBox(width: 4),
+          Text(text, style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold)),
+          if (badgeCount > 0) ...[
+            const SizedBox(width: 4),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+              decoration: BoxDecoration(
+                color: badgeColor,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$badgeCount',
+                style: GoogleFonts.inter(color: Colors.black, fontSize: 9.5, fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  // ── SEKME 1: PERSONEL & MAAŞ & MESAİ ──
   Widget _buildPersonnelAndSalaryTab(int totalPersonnel, int pendingCount, double totalHakedisPool) {
     final int v10Count = _personeller.where((p) {
       final ver = p['app_version']?.toString() ?? '';
@@ -650,54 +806,54 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
       return true;
     }).toList();
 
-
     return RefreshIndicator(
       onRefresh: _fetchData,
-      color: const Color(0xFFDC2626),
+      color: laserCrimson,
+      backgroundColor: cardSurface,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 30),
         children: [
-          // ── KPI ÖZET KARTLARI ──
+          // ── KPI Telemetri Deck ──
           Row(
             children: [
               Expanded(
-                child: _buildKpiCard(
-                  title: 'Toplam Personel',
+                child: _buildModernKpiCard(
+                  title: 'TOPLAM PERSONEL',
                   value: '$totalPersonnel Kişi',
-                  subtitle: '$pendingCount Onay Bekliyor',
+                  subtitle: '$pendingCount Başvuru Bekliyor',
                   icon: Icons.groups_rounded,
-                  color: const Color(0xFF38BDF8),
+                  accentColor: cyberCyan,
                 ),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _buildKpiCard(
-                  title: 'Maaş & Mesai Havuzu',
+                child: _buildModernKpiCard(
+                  title: 'HAKEDİŞ HAVUZU',
                   value: _formatCurrency(totalHakedisPool),
-                  subtitle: 'Aylık Toplam Hakediş',
+                  subtitle: 'Aylık Toplam Bütçe',
                   icon: Icons.payments_rounded,
-                  color: const Color(0xFF10B981),
+                  accentColor: neonEmerald,
                 ),
               ),
             ],
           ),
 
-          const SizedBox(height: 14),
+          const SizedBox(height: 12),
 
-          // ── 🚀 V10.0 GÜNCELLEME TAKİP KARTI ──
+          // ── v10.0 Dağıtım İlerleme Banner'ı ──
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
               gradient: LinearGradient(
                 colors: [
-                  const Color(0xFF10B981).withValues(alpha: 0.15),
-                  const Color(0xFF141722),
+                  neonEmerald.withValues(alpha: 0.15),
+                  cardSurface,
                 ],
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
               ),
               borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+              border: Border.all(color: neonEmerald.withValues(alpha: 0.4)),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -707,10 +863,10 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   children: [
                     Row(
                       children: [
-                        const Icon(Icons.rocket_launch_rounded, color: Color(0xFF10B981), size: 18),
+                        const Icon(Icons.rocket_launch_rounded, color: neonEmerald, size: 18),
                         const SizedBox(width: 8),
                         Text(
-                          'v10.0 Güncelleme Durumu',
+                          'v10.0 Sürüm Yayılımı',
                           style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white),
                         ),
                       ],
@@ -718,12 +874,12 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF10B981),
+                        color: neonEmerald,
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
                         '%${(updatePercent * 100).toInt()} Güncellendi',
-                        style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w900, color: Colors.white),
+                        style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w900, color: Colors.black),
                       ),
                     ),
                   ],
@@ -735,78 +891,65 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                     value: updatePercent,
                     minHeight: 6,
                     backgroundColor: const Color(0xFF1E2430),
-                    valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF10B981)),
+                    valueColor: const AlwaysStoppedAnimation<Color>(neonEmerald),
                   ),
                 ),
                 const SizedBox(height: 8),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      '🟢 Güncelleyen: $v10Count Kişi',
-                      style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
-                    ),
-                    Text(
-                      '🟠 Eski Sürümde: $eskiCount Kişi',
-                      style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFFF59E0B)),
-                    ),
+                    Text('🟢 Güncelleyen: $v10Count Kişi', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: neonEmerald)),
+                    Text('🟠 Eski Sürüm: $eskiCount Kişi', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: amberGold)),
                   ],
                 ),
               ],
             ),
           ),
 
+          const SizedBox(height: 12),
 
-          const SizedBox(height: 14),
-
-          // ── 📑 2. RAPOR AL & DASHBOARD AÇ/KAPA DÜĞMELERİ ──
+          // ── Dashboard / Grafikler Aç-Kapa ──
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isExportingExcel ? null : _exportPersonnelToExcel,
-                  icon: _isExportingExcel
-                      ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.table_view_rounded, size: 16),
-                  label: Text(_isExportingExcel ? 'Hazırlanıyor...' : 'Puantaj Excel İndir', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 11.5)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF10B981),
-                    foregroundColor: Colors.white,
-                    elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 11),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                ),
+              Text(
+                'CANLI OPERASYON TELEMETRİSİ',
+                style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w800, color: const Color(0xFF8E9EB5), letterSpacing: 0.5),
               ),
-              const SizedBox(width: 10),
-              OutlinedButton.icon(
-                onPressed: () => setState(() => _showAnalyticsCharts = !_showAnalyticsCharts),
-                icon: Icon(_showAnalyticsCharts ? Icons.pie_chart_rounded : Icons.pie_chart_outline_rounded, size: 16),
-                label: Text(_showAnalyticsCharts ? 'Grafikleri Gizle' : 'Grafikleri Göster', style: const TextStyle(fontSize: 11.5)),
-                style: OutlinedButton.styleFrom(
-                  foregroundColor: const Color(0xFF38BDF8),
-                  side: const BorderSide(color: Color(0xFF38BDF8)),
-                  padding: const EdgeInsets.symmetric(vertical: 11, horizontal: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              InkWell(
+                onTap: () => setState(() => _showAnalyticsCharts = !_showAnalyticsCharts),
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  child: Row(
+                    children: [
+                      Icon(_showAnalyticsCharts ? Icons.pie_chart_rounded : Icons.pie_chart_outline_rounded, size: 14, color: cyberCyan),
+                      const SizedBox(width: 4),
+                      Text(
+                        _showAnalyticsCharts ? 'Grafikleri Gizle' : 'Grafikleri Göster',
+                        style: GoogleFonts.inter(color: cyberCyan, fontSize: 11.5, fontWeight: FontWeight.w600),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
           ),
 
+          if (_showAnalyticsCharts) ...[
+            const SizedBox(height: 8),
+            _buildAnalyticsSection(),
+          ],
+
           const SizedBox(height: 14),
 
-          // ── 📊 1. CANLI SAHA & VARDİYA GRAFİKLERİ TELEMETRİSİ ──
-          if (_showAnalyticsCharts) _buildAnalyticsSection(),
-
-          const SizedBox(height: 14),
-
-          // ── ARAMA & FİLTRELEME ÇUBUĞU ──
+          // ── Arama Çubuğu ──
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 14),
             decoration: BoxDecoration(
-              color: const Color(0xFF141722),
+              color: cardSurface,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFF272A36)),
+              border: Border.all(color: cardBorder),
             ),
             child: Row(
               children: [
@@ -817,7 +960,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                     onChanged: (val) => setState(() => _searchQuery = val),
                     style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
                     decoration: const InputDecoration(
-                      hintText: 'Personel adı veya meslek ara...',
+                      hintText: 'Personel adı, unvan veya görev ara...',
                       hintStyle: TextStyle(color: Color(0xFF64748B), fontSize: 13),
                       border: InputBorder.none,
                     ),
@@ -832,33 +975,33 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
             ),
           ),
 
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
-          // Filtre Butonları
+          // ── Filtre Çipleri ──
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _buildFilterChip('all', 'Tümü (${_personeller.length})'),
+                _buildModernFilterChip('all', 'Tümü (${_personeller.length})'),
                 const SizedBox(width: 8),
-                _buildFilterChip('v10', '🚀 v10.0 Güncelleyenler ($v10Count)'),
+                _buildModernFilterChip('v10', '🚀 v10.0 Güncel ($v10Count)'),
                 const SizedBox(width: 8),
-                _buildFilterChip('eski', '⚠️ Eski Sürümde Kalanlar ($eskiCount)'),
+                _buildModernFilterChip('eski', '⚠️ Eski Sürüm ($eskiCount)'),
                 const SizedBox(width: 8),
-                _buildFilterChip('onayli', 'Onaylılar (${_personeller.where((p) => p['durum'] == 'onaylandi').length})'),
+                _buildModernFilterChip('onayli', 'Onaylılar (${_personeller.where((p) => p['durum'] == 'onaylandi').length})'),
                 const SizedBox(width: 8),
-                _buildFilterChip('yetkili', '🛡️ Yetkililer (${_personeller.where((p) => p['is_yetkili'] == true || p['yetkili'] == true).length})'),
+                _buildModernFilterChip('yetkili', '🛡️ Yetkililer (${_personeller.where((p) => p['is_yetkili'] == true || p['yetkili'] == true).length})'),
                 const SizedBox(width: 8),
-                _buildFilterChip('vip', '👑 VIP (${_personeller.where((p) => p['is_vip'] == true).length})'),
+                _buildModernFilterChip('vip', '👑 VIP (${_personeller.where((p) => p['is_vip'] == true).length})'),
                 const SizedBox(width: 8),
-                _buildFilterChip('bekleyen', '⏳ Bekleyenler ($pendingCount)'),
+                _buildModernFilterChip('bekleyen', '⏳ Bekleyenler ($pendingCount)'),
               ],
             ),
           ),
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 14),
 
-          // ── PERSONEL LİSTESİ ──
+          // ── Personel Kartları ──
           if (filteredList.isEmpty)
             Container(
               padding: const EdgeInsets.all(40),
@@ -868,24 +1011,65 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
             )
           else
             ...filteredList.map((p) => _buildExecutivePersonnelCard(p)),
-
-          const SizedBox(height: 40),
         ],
       ),
     );
   }
 
-  Widget _buildFilterChip(String type, String label) {
+  Widget _buildModernKpiCard({
+    required String title,
+    required String value,
+    required String subtitle,
+    required IconData icon,
+    required Color accentColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cardSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(title, style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF8E9EB5), fontWeight: FontWeight.w800, letterSpacing: 0.5)),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: accentColor.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(icon, color: accentColor, size: 16),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          FittedBox(
+            fit: BoxFit.scaleDown,
+            child: Text(value, style: GoogleFonts.inter(fontSize: 17, fontWeight: FontWeight.w900, color: Colors.white)),
+          ),
+          const SizedBox(height: 2),
+          Text(subtitle, style: GoogleFonts.inter(fontSize: 10, color: accentColor, fontWeight: FontWeight.bold)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildModernFilterChip(String type, String label) {
     final isSelected = _filterType == type;
     return GestureDetector(
       onTap: () => setState(() => _filterType = type),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6.5),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFDC2626) : const Color(0xFF141722),
+          color: isSelected ? laserCrimson : cardSurface,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: isSelected ? const Color(0xFFDC2626) : const Color(0xFF272A36)),
+          border: Border.all(color: isSelected ? laserCrimson : cardBorder),
         ),
         child: Text(
           label,
@@ -899,37 +1083,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     );
   }
 
-  Widget _buildKpiCard({required String title, required String value, required String subtitle, required IconData icon, required Color color}) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF12141C),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF272A36)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(title, style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w600)),
-              Icon(icon, color: color, size: 18),
-            ],
-          ),
-          const SizedBox(height: 8),
-          FittedBox(
-            fit: BoxFit.scaleDown,
-            child: Text(value, style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w900, color: Colors.white)),
-          ),
-          const SizedBox(height: 2),
-          Text(subtitle, style: GoogleFonts.inter(fontSize: 10, color: color, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
-  // ── DETAYLI PERSONEL KARTI (Maaş, Mesai, Vardiya, Giriş-Çıkış) ──
+  // ── Executive Personnel Card ──
   Widget _buildExecutivePersonnelCard(Map<String, dynamic> p) {
     final String name = p['ad_soyad'] ?? 'İsimsiz Personel';
     final String meslek = p['meslek'] ?? 'Liman İşçisi A';
@@ -960,28 +1114,29 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     final String sonGirisSaat = p['son_hareket_saati'] ?? (logs.isNotEmpty ? logs.last['saat'] : '');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
+      margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(18),
+        color: cardSurface,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isYetkili
-              ? const Color(0xFFDC2626).withValues(alpha: 0.6)
-              : (isApproved ? const Color(0xFF272A36) : const Color(0xFFF59E0B).withValues(alpha: 0.5)),
+          color: isYetkili ? laserCrimson.withValues(alpha: 0.7) : (isApproved ? cardBorder : amberGold.withValues(alpha: 0.5)),
           width: isYetkili ? 1.5 : 1.0,
         ),
       ),
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
-          tilePadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          tilePadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           leading: Stack(
             clipBehavior: Clip.none,
             children: [
               CircleAvatar(
-                radius: 22,
-                backgroundColor: const Color(0xFF272A36),
-                child: Text(_getInitials(name), style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
+                radius: 20,
+                backgroundColor: isYetkili ? laserCrimson.withValues(alpha: 0.2) : cardSurfaceElevated,
+                child: Text(
+                  _getInitials(name),
+                  style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                ),
               ),
               if (isYetkili)
                 Positioned(
@@ -989,8 +1144,8 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   right: -2,
                   child: Container(
                     padding: const EdgeInsets.all(3),
-                    decoration: const BoxDecoration(color: Color(0xFFDC2626), shape: BoxShape.circle),
-                    child: const Icon(Icons.shield_rounded, size: 10, color: Colors.white),
+                    decoration: const BoxDecoration(color: laserCrimson, shape: BoxShape.circle),
+                    child: const Icon(Icons.shield_rounded, size: 9, color: Colors.white),
                   ),
                 ),
             ],
@@ -1009,38 +1164,31 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   margin: const EdgeInsets.only(left: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFDC2626).withValues(alpha: 0.2),
+                    color: laserCrimson.withValues(alpha: 0.2),
                     borderRadius: BorderRadius.circular(6),
-                    border: Border.all(color: const Color(0xFFDC2626)),
+                    border: Border.all(color: laserCrimson),
                   ),
-                  child: Text('YETKİLİ', style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.w900, color: const Color(0xFFDC2626))),
+                  child: Text('YETKİLİ', style: GoogleFonts.inter(fontSize: 8.5, fontWeight: FontWeight.w900, color: laserCrimson)),
                 ),
-              // ── 👑 3. VIP HIZLI TOGGLE BUTONU ──
+              // VIP Quick Button
               GestureDetector(
                 onTap: () => _toggleVipStatus(p['id'], isVip, name: name, cihazId: p['cihaz_id']),
                 child: Container(
                   margin: const EdgeInsets.only(left: 6),
                   padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
                   decoration: BoxDecoration(
-                    color: isVip ? const Color(0xFFF59E0B).withValues(alpha: 0.25) : const Color(0xFF1E2430),
+                    color: isVip ? amberGold.withValues(alpha: 0.25) : cardSurfaceElevated,
                     borderRadius: BorderRadius.circular(8),
-                    border: Border.all(
-                      color: isVip ? const Color(0xFFF59E0B) : const Color(0xFF334155),
-                      width: 1,
-                    ),
+                    border: Border.all(color: isVip ? amberGold : cardBorder, width: 0.8),
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(Icons.star_rounded, size: 12, color: isVip ? const Color(0xFFF59E0B) : const Color(0xFF64748B)),
+                      Icon(Icons.star_rounded, size: 12, color: isVip ? amberGold : const Color(0xFF64748B)),
                       const SizedBox(width: 3),
                       Text(
                         isVip ? 'VIP' : '+VIP',
-                        style: GoogleFonts.inter(
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w900,
-                          color: isVip ? const Color(0xFFF59E0B) : const Color(0xFF94A3B8),
-                        ),
+                        style: GoogleFonts.inter(fontSize: 9.5, fontWeight: FontWeight.w900, color: isVip ? amberGold : const Color(0xFF94A3B8)),
                       ),
                     ],
                   ),
@@ -1055,73 +1203,55 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
               Row(
                 children: [
                   Text(meslek, style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFF94A3B8))),
-                  const SizedBox(width: 8),
+                  const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                     decoration: BoxDecoration(
-                      color: (isApproved ? const Color(0xFF10B981) : const Color(0xFFF59E0B)).withValues(alpha: 0.15),
+                      color: (isApproved ? neonEmerald : amberGold).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
                     ),
                     child: Text(
                       isApproved ? 'Onaylı' : 'Bekliyor',
-                      style: GoogleFonts.inter(fontSize: 9.5, color: isApproved ? const Color(0xFF10B981) : const Color(0xFFF59E0B), fontWeight: FontWeight.bold),
+                      style: GoogleFonts.inter(
+                        fontSize: 9.5,
+                        color: isApproved ? neonEmerald : amberGold,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                   ),
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                     decoration: BoxDecoration(
-                      color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.15) : const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                      color: (isV10Updated ? neonEmerald : amberGold).withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
-                      border: Border.all(
-                        color: isV10Updated ? const Color(0xFF10B981).withValues(alpha: 0.5) : const Color(0xFFF59E0B).withValues(alpha: 0.4),
+                    ),
+                    child: Text(
+                      isV10Updated ? (updateTime.isNotEmpty ? 'v10.0 ($updateTime)' : 'v10.0') : 'Eski',
+                      style: GoogleFonts.inter(
+                        fontSize: 9,
+                        color: isV10Updated ? neonEmerald : amberGold,
+                        fontWeight: FontWeight.bold,
                       ),
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          isV10Updated ? Icons.verified_rounded : Icons.pending_actions_rounded,
-                          size: 9,
-                          color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                        ),
-                        const SizedBox(width: 3),
-                        Text(
-                          isV10Updated ? 'v10.0 GÜNCEL' : 'ESKİ SÜRÜM',
-                          style: GoogleFonts.inter(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: isV10Updated ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                          ),
-                        ),
-                      ],
-                    ),
                   ),
-                  if (updateTime.isNotEmpty) ...[
-                    const SizedBox(width: 6),
-                    Text(
-                      updateTime,
-                      style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF64748B)),
-                    ),
-                  ],
                 ],
               ),
               const SizedBox(height: 8),
-
-              // 💰 Hızlı Maaş & Mesai Şeridi
+              // Salary quick bar
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0D0F15),
+                  color: cardSurfaceElevated,
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text('Net Hakediş:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF64748B))),
+                    Text('Net Hakediş:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF8E9EB5))),
                     Text(
                       _formatCurrency(netHakedis),
-                      style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w900, color: const Color(0xFF10B981)),
+                      style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w900, color: neonEmerald),
                     ),
                   ],
                 ),
@@ -1130,55 +1260,55 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
           ),
           children: [
             Container(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(14),
               decoration: const BoxDecoration(
-                color: Color(0xFF0D0F15),
-                borderRadius: BorderRadius.vertical(bottom: Radius.circular(18)),
+                color: Color(0xFF0B0E16),
+                borderRadius: BorderRadius.vertical(bottom: Radius.circular(16)),
               ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // 1. MAAŞ & MESAİ DETAY BLOKU
-                  Text('💰 MAAŞ VE MESAİ DETAYI', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w800, color: const Color(0xFF94A3B8))),
-                  const SizedBox(height: 8),
+                  // 1. Maaş & Mesai Detay Bloğu
+                  Text('💰 MAAŞ VE MESAİ ANALİZİ', style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w800, color: const Color(0xFF8E9EB5), letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF141722),
+                      color: cardSurface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF272A36)),
+                      border: Border.all(color: cardBorder),
                     ),
                     child: Column(
                       children: [
                         _buildDataRow('Taban Maaş:', _formatCurrency(jobDetails.baseSalary), isBold: true),
-                        const Divider(height: 12, color: Color(0xFF272A36)),
-                        _buildDataRow('Normal Mesai ($normalMesaiGun Gün):', '+ ${_formatCurrency(normalMesaiKazanci)}', valueColor: const Color(0xFFF59E0B)),
+                        const Divider(height: 12, color: cardBorder),
+                        _buildDataRow('Normal Mesai ($normalMesaiGun Gün):', '+ ${_formatCurrency(normalMesaiKazanci)}', valueColor: amberGold),
                         const SizedBox(height: 4),
-                        _buildDataRow('Bayram Mesaisi ($bayramMesaiGun Gün):', '+ ${_formatCurrency(bayramMesaiKazanci)}', valueColor: const Color(0xFF8B5CF6)),
-                        const Divider(height: 12, color: Color(0xFF272A36)),
-                        _buildDataRow('Toplam Kazanç:', _formatCurrency(netHakedis), valueColor: const Color(0xFF10B981), isBold: true),
+                        _buildDataRow('Bayram Mesaisi ($bayramMesaiGun Gün):', '+ ${_formatCurrency(bayramMesaiKazanci)}', valueColor: electricViolet),
+                        const Divider(height: 12, color: cardBorder),
+                        _buildDataRow('Toplam Kazanç:', _formatCurrency(netHakedis), valueColor: neonEmerald, isBold: true),
                       ],
                     ),
                   ),
 
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
 
-                  // 2. VARDİYA BİLGİSİ
-                  Text('🔄 VARDİYA DÜZENİ', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w800, color: const Color(0xFF94A3B8))),
-                  const SizedBox(height: 8),
+                  // 2. Vardiya Düzeni
+                  Text('🔄 VARDİYA DÜZENİ', style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w800, color: const Color(0xFF8E9EB5), letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF141722),
+                      color: cardSurface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF272A36)),
+                      border: Border.all(color: cardBorder),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            const Icon(Icons.schedule_rounded, color: Color(0xFF38BDF8), size: 16),
+                            const Icon(Icons.schedule_rounded, color: cyberCyan, size: 15),
                             const SizedBox(width: 8),
                             Expanded(child: Text(vardiyaInfo['vardiyaAdi']!, style: GoogleFonts.inter(fontSize: 12, color: Colors.white, fontWeight: FontWeight.w600))),
                           ],
@@ -1186,60 +1316,42 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                         const SizedBox(height: 6),
                         Row(
                           children: [
-                            const Icon(Icons.work_history_rounded, color: Color(0xFF10B981), size: 16),
+                            const Icon(Icons.work_history_rounded, color: neonEmerald, size: 15),
                             const SizedBox(width: 8),
-                            Expanded(child: Text('Bugün: ${vardiyaInfo['canliDurum']!}', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFF10B981), fontWeight: FontWeight.bold))),
+                            Expanded(child: Text('Bugün: ${vardiyaInfo['canliDurum']!}', style: GoogleFonts.inter(fontSize: 11.5, color: neonEmerald, fontWeight: FontWeight.bold))),
                           ],
                         ),
                       ],
                     ),
                   ),
 
-                  const SizedBox(height: 14),
+                  const SizedBox(height: 12),
 
-                  // 3. UYGULAMA GİRİŞ-ÇIKIŞ KULLANIM SAYACI
-                  Text('📊 UYGULAMA KULLANIM & GİRİŞ-ÇIKIŞ', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w800, color: const Color(0xFF94A3B8))),
-                  const SizedBox(height: 8),
+                  // 3. Giriş-Çıkış Sayaç & GPS
+                  Text('📊 UYGULAMA KULLANIM & GİRİŞ-ÇIKIŞ', style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.w800, color: const Color(0xFF8E9EB5), letterSpacing: 0.5)),
+                  const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF141722),
+                      color: cardSurface,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF272A36)),
+                      border: Border.all(color: cardBorder),
                     ),
                     child: Column(
                       children: [
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.phone_android_rounded, color: Color(0xFF00FF66), size: 16),
-                                const SizedBox(width: 8),
-                                Text('Uygulama Giriş Sayısı:', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1))),
-                              ],
-                            ),
-                            Text(
-                              '$girisSayisi Giriş ($totalHareket Hareket)',
-                              style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: const Color(0xFF00FF66)),
-                            ),
+                            Text('Uygulama Giriş Sayısı:', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1))),
+                            Text('$girisSayisi Giriş ($totalHareket Hareket)', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: neonEmerald)),
                           ],
                         ),
                         const SizedBox(height: 6),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Row(
-                              children: [
-                                const Icon(Icons.access_time_rounded, color: Color(0xFF94A3B8), size: 16),
-                                const SizedBox(width: 8),
-                                Text('Son Hareket:', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1))),
-                              ],
-                            ),
-                            Text(
-                              '$sonGirisTarih $sonGirisSaat',
-                              style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: const Color(0xFF94A3B8)),
-                            ),
+                            Text('Son Hareket:', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1))),
+                            Text('$sonGirisTarih $sonGirisSaat', style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: const Color(0xFF94A3B8))),
                           ],
                         ),
                         if (logs.isNotEmpty) ...[
@@ -1251,8 +1363,8 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                               icon: const Icon(Icons.history_rounded, size: 14),
                               label: const Text('Tüm Oturum Geçmişini Gör', style: TextStyle(fontSize: 11)),
                               style: OutlinedButton.styleFrom(
-                                foregroundColor: const Color(0xFF38BDF8),
-                                side: const BorderSide(color: Color(0xFF38BDF8)),
+                                foregroundColor: cyberCyan,
+                                side: const BorderSide(color: cardBorder),
                                 visualDensity: VisualDensity.compact,
                               ),
                             ),
@@ -1262,48 +1374,32 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                     ),
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 14),
 
-                  // 4. AKSİYON BUTONLARI (Yetkili Yap, Onayla, VIP)
+                  // 4. Aksiyon Butonları
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
                     children: [
-                      // Yetkili Butonu
                       ElevatedButton.icon(
                         onPressed: () => _toggleYetkiliStatus(p['id'], isYetkili),
                         icon: Icon(isYetkili ? Icons.security_rounded : Icons.shield_outlined, size: 14),
                         label: Text(isYetkili ? 'Yetkiyi Kaldır' : '🛡️ Yetkili Yap', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: isYetkili ? const Color(0xFF272A36) : const Color(0xFFDC2626),
+                          backgroundColor: isYetkili ? cardSurfaceElevated : laserCrimson,
                           foregroundColor: Colors.white,
                           elevation: 0,
                           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                         ),
                       ),
-
-                      // VIP Butonu
-                      ElevatedButton.icon(
-                        onPressed: () => _toggleVipStatus(p['id'], isVip, name: name, cihazId: p['cihaz_id']),
-                        icon: Icon(isVip ? Icons.star_border_rounded : Icons.star_rounded, size: 14),
-                        label: Text(isVip ? 'VIP Yetkisini Kaldır' : '👑 VIP Yap & Bildir', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: isVip ? const Color(0xFF272A36) : const Color(0xFFF59E0B),
-                          foregroundColor: Colors.white,
-                          elevation: 0,
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                        ),
-                      ),
-
-                      // Onay / Ret Butonları
                       if (!isApproved) ...[
                         ElevatedButton.icon(
                           onPressed: () => _updateStatus(p['id'], 'onaylandi'),
                           icon: const Icon(Icons.check_rounded, size: 14),
-                          label: const Text('Onayla', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          label: const Text('Hesabı Onayla', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF10B981),
-                            foregroundColor: Colors.white,
+                            backgroundColor: neonEmerald,
+                            foregroundColor: Colors.black,
                             elevation: 0,
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           ),
@@ -1313,8 +1409,8 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                           icon: const Icon(Icons.close_rounded, size: 14),
                           label: const Text('Reddet', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                           style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFEF4444),
-                            foregroundColor: Colors.white,
+                            backgroundColor: laserCrimson.withValues(alpha: 0.15),
+                            foregroundColor: laserCrimson,
                             elevation: 0,
                             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                           ),
@@ -1344,7 +1440,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     );
   }
 
-  // ── ⏳ SEKME 2: BEKLEYEN ONAYLAR (Hızlı Onay Listesi) ──
+  // ── SEKME 2: BEKLEYEN ONAYLAR ──
   Widget _buildPendingApprovalsTab() {
     final pendingList = _personeller.where((p) => p['durum'] == 'onay_bekliyor').toList();
 
@@ -1353,11 +1449,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.check_circle_outline_rounded, color: Color(0xFF10B981), size: 56),
-            const SizedBox(height: 16),
-            Text('Onay bekleyen personel bulunmuyor.', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+            const Icon(Icons.check_circle_outline_rounded, color: neonEmerald, size: 52),
+            const SizedBox(height: 14),
+            Text('Onay Bekleyen Personel Yok', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
             const SizedBox(height: 6),
-            Text('Tüm kayıt başvuruları sonuçlandırılmış.', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF64748B))),
+            Text('Tüm personel kayıtları sonuçlandırılmıştır.', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF64748B))),
           ],
         ),
       );
@@ -1377,9 +1473,9 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: const Color(0xFF141722),
+            color: cardSurface,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.4)),
+            border: Border.all(color: amberGold.withValues(alpha: 0.4)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1388,8 +1484,8 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                 children: [
                   CircleAvatar(
                     radius: 20,
-                    backgroundColor: const Color(0xFFF59E0B).withValues(alpha: 0.2),
-                    child: Text(_getInitials(name), style: GoogleFonts.inter(color: const Color(0xFFF59E0B), fontWeight: FontWeight.bold)),
+                    backgroundColor: amberGold.withValues(alpha: 0.15),
+                    child: Text(_getInitials(name), style: GoogleFonts.inter(color: amberGold, fontWeight: FontWeight.bold)),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -1404,10 +1500,10 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                     decoration: BoxDecoration(
-                      color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                      color: amberGold.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Text('Bekliyor', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFFF59E0B))),
+                    child: Text('Bekliyor', style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: amberGold)),
                   ),
                 ],
               ),
@@ -1432,9 +1528,10 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                       icon: const Icon(Icons.check_circle_rounded, size: 16),
                       label: const Text('Başvuruyu Onayla'),
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF10B981),
-                        foregroundColor: Colors.white,
+                        backgroundColor: neonEmerald,
+                        foregroundColor: Colors.black,
                         elevation: 0,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                       ),
                     ),
                   ),
@@ -1442,9 +1539,10 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   ElevatedButton(
                     onPressed: () => _updateStatus(p['id'], 'reddedildi'),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFEF4444).withValues(alpha: 0.15),
-                      foregroundColor: const Color(0xFFEF4444),
+                      backgroundColor: laserCrimson.withValues(alpha: 0.15),
+                      foregroundColor: laserCrimson,
                       elevation: 0,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                     child: const Text('Reddet'),
                   ),
@@ -1457,465 +1555,33 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     );
   }
 
-  // ── 📢 SEKME 3: DUYURU & ACİL ANONS YAYINLA ──
-  Widget _buildAnnouncementsTab() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        // ── YENİ DUYURU FORMU KARTI ──
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: const Color(0xFF141722),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.3)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFDC2626).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.campaign_rounded, color: Color(0xFFDC2626), size: 22),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Saha & Amir Duyurusu Yayınla', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
-                        Text('OneSignal ile tüm personellere anlık bildirim gider', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-
-              const SizedBox(height: 16),
-
-              // Başlık
-              TextField(
-                controller: _duyuruTitleCtrl,
-                style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
-                decoration: InputDecoration(
-                  labelText: 'Duyuru Başlığı',
-                  labelStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
-                  hintText: 'Örn: Vardiya Değişikliği / İSG Uyarısı',
-                  hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                  filled: true,
-                  fillColor: const Color(0xFF0D0F15),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF272A36))),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF272A36))),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFDC2626))),
-                ),
-              ),
-
-              const SizedBox(height: 12),
-
-              // İçerik
-              TextField(
-                controller: _duyuruContentCtrl,
-                maxLines: 4,
-                style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
-                decoration: InputDecoration(
-                  labelText: 'Duyuru İçeriği',
-                  labelStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
-                  hintText: 'Saha personellerine iletilecek mesajı yazınız...',
-                  hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
-                  filled: true,
-                  fillColor: const Color(0xFF0D0F15),
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF272A36))),
-                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFF272A36))),
-                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: const BorderSide(color: Color(0xFFDC2626))),
-                ),
-              ),
-
-              const SizedBox(height: 12),
-
-              // Acil Durum / Kırmızı Uyarı Anahtarı
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                decoration: BoxDecoration(
-                  color: _duyuruIsAlert ? const Color(0xFFDC2626).withValues(alpha: 0.12) : const Color(0xFF0D0F15),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: _duyuruIsAlert ? const Color(0xFFDC2626).withValues(alpha: 0.4) : const Color(0xFF272A36)),
-                ),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        Icon(Icons.warning_amber_rounded, color: _duyuruIsAlert ? const Color(0xFFDC2626) : const Color(0xFF64748B), size: 20),
-                        const SizedBox(width: 8),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Acil Durum Bildirimi (Kırmızı Alarm)', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                            Text('Önemli operasyon durdurması veya hava alarmı', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8))),
-                          ],
-                        ),
-                      ],
-                    ),
-                    Switch(
-                      value: _duyuruIsAlert,
-                      onChanged: (val) => setState(() => _duyuruIsAlert = val),
-                      activeThumbColor: const Color(0xFFDC2626),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // Gönder Butonu
-              SizedBox(
-                width: double.infinity,
-                height: 48,
-                child: ElevatedButton.icon(
-                  onPressed: _isSendingDuyuru ? null : _sendDuyuru,
-                  icon: _isSendingDuyuru
-                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                      : const Icon(Icons.send_rounded, size: 18),
-                  label: Text(_isSendingDuyuru ? 'Yayınlanıyor...' : 'Duyuruyu Yayınla & Push Gönder', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFDC2626),
-                    foregroundColor: Colors.white,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    elevation: 0,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-
-        const SizedBox(height: 24),
-
-        // ── AKTİF DUYURULAR LİSTESİ ──
-        Text('📋 YAYINDAKİ DUYURULAR (${_duyurular.length})', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w800, color: const Color(0xFF94A3B8))),
-        const SizedBox(height: 10),
-
-        if (_duyurular.isEmpty)
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.all(30.0),
-              child: Text('Henüz yayınlanmış duyuru yok.', style: GoogleFonts.inter(color: const Color(0xFF64748B))),
-            ),
-          )
-        else
-          ..._duyurular.map((d) {
-            final isAlert = d['is_alert'] == true;
-            return Container(
-              margin: const EdgeInsets.only(bottom: 10),
-              padding: const EdgeInsets.all(14),
-              decoration: BoxDecoration(
-                color: const Color(0xFF141722),
-                borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: isAlert ? const Color(0xFFDC2626).withValues(alpha: 0.5) : const Color(0xFF272A36)),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: (isAlert ? const Color(0xFFDC2626) : const Color(0xFF38BDF8)).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      isAlert ? Icons.warning_rounded : Icons.info_outline_rounded,
-                      color: isAlert ? const Color(0xFFDC2626) : const Color(0xFF38BDF8),
-                      size: 18,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                          children: [
-                            Expanded(child: Text(d['baslik'] ?? '', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white))),
-                            Text((d['tarih'] ?? '').toString().split('T').first, style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B))),
-                          ],
-                        ),
-                        const SizedBox(height: 4),
-                        Text(d['icerik'] ?? '', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1), height: 1.3)),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 18),
-                    tooltip: 'Duyuruyu Sil',
-                    onPressed: () => _deleteDuyuru(d['id']),
-                  ),
-                ],
-              ),
-            );
-          }),
-
-        const SizedBox(height: 40),
-      ],
-    );
-  }
-
-  // ── 📊 1. CANLI SAHA & VARDİYA GRAFİKLERİ BİLEŞENİ ──
-  Widget _buildAnalyticsSection() {
-    final int inFactory = _personeller.where((p) => p['son_hareket_tipi'] == 'is_giris').length;
-    final int outside = _personeller.length - inFactory;
-    final double inFactoryPercent = _personeller.isEmpty ? 0 : (inFactory / _personeller.length * 100);
-
-    // Vardiya dağılımları
-    int saliCount = 0;
-    int carsambaCount = 0;
-    int cumaCount = 0;
-    int cumartesiCount = 0;
-    int digerCount = 0;
-
-    for (var p in _personeller) {
-      final v = (p['vardiya'] ?? '').toString().toLowerCase();
-      if (v.contains('sali') || v.contains('salı')) {
-        saliCount++;
-      } else if (v.contains('carsamba') || v.contains('çarşamba')) {
-        carsambaCount++;
-      } else if (v.contains('cuma')) {
-        cumaCount++;
-      } else if (v.contains('cumartesi')) {
-        cumartesiCount++;
-      } else {
-        digerCount++;
-      }
-    }
-
-    final double maxBarVal = [saliCount, carsambaCount, cumaCount, cumartesiCount, 5]
-        .reduce((curr, next) => curr > next ? curr : next)
-        .toDouble() + 2;
-
-    return Container(
-      decoration: BoxDecoration(
-        color: const Color(0xFF12151F),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF262C3E)),
-      ),
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              children: [
-                // 1. DONUT GRAFİĞİ (Saha Durumu)
-                Row(
-                  children: [
-                    // Donut Grafik
-                    SizedBox(
-                      width: 95,
-                      height: 95,
-                      child: Stack(
-                        children: [
-                          PieChart(
-                            PieChartData(
-                              sectionsSpace: 3,
-                              centerSpaceRadius: 28,
-                              sections: [
-                                PieChartSectionData(
-                                  value: inFactory.toDouble() > 0 ? inFactory.toDouble() : 0.001,
-                                  color: const Color(0xFF10B981),
-                                  radius: 14,
-                                  showTitle: false,
-                                ),
-                                PieChartSectionData(
-                                  value: outside.toDouble() > 0 ? outside.toDouble() : 0.001,
-                                  color: const Color(0xFF334155),
-                                  radius: 12,
-                                  showTitle: false,
-                                ),
-                              ],
-                            ),
-                          ),
-                          Center(
-                            child: Text(
-                              '%${inFactoryPercent.toInt()}',
-                              style: GoogleFonts.inter(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w900,
-                                color: Colors.white,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 16),
-                    // Açıklamalar
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            'Canlı Saha Katılımı',
-                            style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.bold, color: Colors.white),
-                          ),
-                          const SizedBox(height: 6),
-                          Row(
-                            children: [
-                              Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF10B981), shape: BoxShape.circle)),
-                              const SizedBox(width: 8),
-                              Text('Sahada (Fabrikada):', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
-                              const Spacer(),
-                              Text('$inFactory Kişi', style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold, color: const Color(0xFF10B981))),
-                            ],
-                          ),
-                          const SizedBox(height: 4),
-                          Row(
-                            children: [
-                              Container(width: 9, height: 9, decoration: const BoxDecoration(color: Color(0xFF334155), shape: BoxShape.circle)),
-                              const SizedBox(width: 8),
-                              Text('Dışarıda / İzinli:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
-                              const Spacer(),
-                              Text('$outside Kişi', style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold, color: const Color(0xFF94A3B8))),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-
-                const SizedBox(height: 16),
-                const Divider(height: 1, color: Color(0xFF222838)),
-                const SizedBox(height: 14),
-
-                // 2. ÇUBUK GRAFİĞİ (Posta Dağılımı)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Posta Grupları Dağılımı',
-                      style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                    Text(
-                      'Toplam ${_personeller.length} Personel',
-                      style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B)),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  height: 110,
-                  child: BarChart(
-                    BarChartData(
-                      maxY: maxBarVal,
-                      barTouchData: BarTouchData(enabled: true),
-                      titlesData: FlTitlesData(
-                        show: true,
-                        topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        bottomTitles: AxisTitles(
-                          sideTitles: SideTitles(
-                            showTitles: true,
-                            getTitlesWidget: (value, meta) {
-                              String title = '';
-                              switch (value.toInt()) {
-                                case 0:
-                                  title = '1. Salı';
-                                  break;
-                                case 1:
-                                  title = '2. Çarş.';
-                                  break;
-                                case 2:
-                                  title = '3. Cuma';
-                                  break;
-                                case 3:
-                                  title = '4. Cmt.';
-                                  break;
-                                case 4:
-                                  title = 'Diğer';
-                                  break;
-                              }
-                              return Padding(
-                                padding: const EdgeInsets.only(top: 6),
-                                child: Text(
-                                  title,
-                                  style: GoogleFonts.inter(fontSize: 9.5, fontWeight: FontWeight.bold, color: const Color(0xFF94A3B8)),
-                                ),
-                              );
-                            },
-                          ),
-                        ),
-                      ),
-                      gridData: const FlGridData(show: false),
-                      borderData: FlBorderData(show: false),
-                      barGroups: [
-                        _buildBarGroup(0, saliCount.toDouble(), const Color(0xFFF59E0B)),
-                        _buildBarGroup(1, carsambaCount.toDouble(), const Color(0xFF8B5CF6)),
-                        _buildBarGroup(2, cumaCount.toDouble(), const Color(0xFF3B82F6)),
-                        _buildBarGroup(3, cumartesiCount.toDouble(), const Color(0xFF10B981)),
-                        _buildBarGroup(4, digerCount.toDouble(), const Color(0xFF64748B)),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  BarChartGroupData _buildBarGroup(int x, double y, Color color) {
-    return BarChartGroupData(
-      x: x,
-      barRods: [
-        BarChartRodData(
-          toY: y,
-          color: color,
-          width: 18,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
-          backDrawRodData: BackgroundBarChartRodData(
-            show: true,
-            toY: 10,
-            color: const Color(0xFF1A1F2C),
-          ),
-        ),
-      ],
-    );
-  }
-
-  // ── 🔄 6. VARDİYA TAKAS TALEPLERİ ONAY MASASI SEKME GÖRÜNÜMÜ ──
+  // ── SEKME 3: VARDİYA TAKAS MASASI ──
   Widget _buildSwapRequestsTab() {
     final pendingSwaps = _swapRequests.where((s) => s['durum'] == 'onay_bekliyor').toList();
 
     return RefreshIndicator(
       onRefresh: _fetchData,
-      color: const Color(0xFFDC2626),
+      color: laserCrimson,
+      backgroundColor: cardSurface,
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Üst Hızlı İşlem Kartı
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: const Color(0xFF141722),
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xFF272A36)),
+              color: cardSurface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: cardBorder),
             ),
             child: Row(
               children: [
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFFF59E0B).withValues(alpha: 0.15),
+                    color: amberGold.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(12),
                   ),
-                  child: const Icon(Icons.swap_calls_rounded, color: Color(0xFFF59E0B), size: 22),
+                  child: const Icon(Icons.swap_calls_rounded, color: amberGold, size: 22),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -1928,7 +1594,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        '${pendingSwaps.length} adet onay bekleyen takas talebi var',
+                        '${pendingSwaps.length} adet onay bekleyen takas var',
                         style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFF94A3B8)),
                       ),
                     ],
@@ -1939,7 +1605,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   icon: const Icon(Icons.edit_calendar_rounded, size: 14),
                   label: const Text('Manuel Ata', style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF38BDF8),
+                    backgroundColor: cyberCyan,
                     foregroundColor: Colors.black,
                     elevation: 0,
                     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -1950,22 +1616,21 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
             ),
           ),
 
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
 
-          // Liste Başlığı
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
                 'TAKAS TALEPLERİ (${_swapRequests.length})',
-                style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w800, color: const Color(0xFF94A3B8)),
+                style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w800, color: const Color(0xFF8E9EB5), letterSpacing: 0.5),
               ),
               if (_swapRequests.isEmpty)
                 TextButton.icon(
                   onPressed: _createSampleSwapRequest,
                   icon: const Icon(Icons.add_circle_outline_rounded, size: 14),
                   label: const Text('Örnek Talep Oluştur', style: TextStyle(fontSize: 11)),
-                  style: TextButton.styleFrom(foregroundColor: const Color(0xFF38BDF8)),
+                  style: TextButton.styleFrom(foregroundColor: cyberCyan),
                 ),
             ],
           ),
@@ -1977,9 +1642,9 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
               margin: const EdgeInsets.only(top: 20),
               padding: const EdgeInsets.all(32),
               decoration: BoxDecoration(
-                color: const Color(0xFF141722),
-                borderRadius: BorderRadius.circular(18),
-                border: Border.all(color: const Color(0xFF272A36)),
+                color: cardSurface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: cardBorder),
               ),
               child: Column(
                 children: [
@@ -1992,24 +1657,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                     textAlign: TextAlign.center,
                     style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF64748B)),
                   ),
-                  const SizedBox(height: 16),
-                  ElevatedButton.icon(
-                    onPressed: _showManualShiftAssignDialog,
-                    icon: const Icon(Icons.edit_calendar_rounded, size: 16),
-                    label: const Text('Personele Vardiya Ata'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF38BDF8),
-                      foregroundColor: Colors.black,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    ),
-                  ),
                 ],
               ),
             )
           else
             ..._swapRequests.map((s) => _buildSwapRequestCard(s)),
-
-          const SizedBox(height: 40),
         ],
       ),
     );
@@ -2020,28 +1672,23 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
     final bool isPending = durum == 'onay_bekliyor';
     final bool isApproved = durum == 'onaylandi';
 
-    final Color statusColor = isPending
-        ? const Color(0xFFF59E0B)
-        : (isApproved ? const Color(0xFF10B981) : const Color(0xFFEF4444));
-    final String statusLabel = isPending
-        ? '⏳ Onay Bekliyor'
-        : (isApproved ? '✅ Onaylandı' : '❌ Reddedildi');
+    final Color statusColor = isPending ? amberGold : (isApproved ? neonEmerald : laserCrimson);
+    final String statusLabel = isPending ? '⏳ Bekliyor' : (isApproved ? '✅ Onaylandı' : '❌ Reddedildi');
 
     return Container(
-      margin: const EdgeInsets.only(bottom: 14),
+      margin: const EdgeInsets.only(bottom: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(18),
+        color: cardSurface,
+        borderRadius: BorderRadius.circular(16),
         border: Border.all(
-          color: isPending ? const Color(0xFFF59E0B).withValues(alpha: 0.5) : const Color(0xFF272A36),
-          width: isPending ? 1.4 : 1.0,
+          color: isPending ? amberGold.withValues(alpha: 0.5) : cardBorder,
+          width: isPending ? 1.2 : 0.8,
         ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Üst Durum & Tarih
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -2051,129 +1698,64 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   color: statusColor.withValues(alpha: 0.15),
                   borderRadius: BorderRadius.circular(6),
                 ),
-                child: Text(
-                  statusLabel,
-                  style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.bold, color: statusColor),
-                ),
+                child: Text(statusLabel, style: GoogleFonts.inter(fontSize: 10.5, fontWeight: FontWeight.bold, color: statusColor)),
               ),
-              Text(
-                swap['tarih_str'] ?? '',
-                style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B)),
-              ),
+              Text(swap['tarih_str'] ?? '', style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B))),
             ],
           ),
-
-          const SizedBox(height: 14),
-
-          // Karşılıklı Takas Kutuları
+          const SizedBox(height: 12),
           Row(
             children: [
-              // Talep Eden Personel
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1B2030),
+                    color: cardSurfaceElevated,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF2E384D)),
+                    border: Border.all(color: cardBorder),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Talep Eden:', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8))),
-                      const SizedBox(height: 2),
-                      Text(
-                        swap['talep_eden_ad'] ?? 'Personel 1',
-                        style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.bold, color: Colors.white),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      Text('Talep Eden:', style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF94A3B8))),
+                      Text(swap['talep_eden_ad'] ?? 'Personel 1', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white), overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF38BDF8).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          swap['mevcut_vardiya'] ?? 'Salı',
-                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF38BDF8)),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
+                      Text(swap['mevcut_vardiya'] ?? 'Salı', style: GoogleFonts.inter(fontSize: 10, color: cyberCyan, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
               ),
-
               const Padding(
                 padding: EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(Icons.sync_alt_rounded, color: Color(0xFFF59E0B), size: 22),
+                child: Icon(Icons.sync_alt_rounded, color: amberGold, size: 20),
               ),
-
-              // Hedef Personel
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: const Color(0xFF1B2030),
+                    color: cardSurfaceElevated,
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF2E384D)),
+                    border: Border.all(color: cardBorder),
                   ),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Hedef Personel:', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8))),
-                      const SizedBox(height: 2),
-                      Text(
-                        swap['hedef_personel_ad'] ?? 'Personel 2',
-                        style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.bold, color: Colors.white),
-                        overflow: TextOverflow.ellipsis,
-                      ),
+                      Text('Hedef Personel:', style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF94A3B8))),
+                      Text(swap['hedef_personel_ad'] ?? 'Personel 2', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white), overflow: TextOverflow.ellipsis),
                       const SizedBox(height: 4),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF10B981).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          swap['hedef_vardiya'] ?? 'Cuma',
-                          style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF10B981)),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
+                      Text(swap['hedef_vardiya'] ?? 'Cuma', style: GoogleFonts.inter(fontSize: 10, color: neonEmerald, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
               ),
             ],
           ),
-
           if ((swap['aciklama'] ?? '').toString().isNotEmpty) ...[
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0F1118),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Row(
-                children: [
-                  const Icon(Icons.chat_bubble_outline_rounded, size: 14, color: Color(0xFF94A3B8)),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      swap['aciklama'] ?? '',
-                      style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFFCBD5E1), fontStyle: FontStyle.italic),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            const SizedBox(height: 8),
+            Text('Not: "${swap['aciklama']}"', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFFCBD5E1), fontStyle: FontStyle.italic)),
           ],
-
           if (isPending) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
@@ -2182,26 +1764,23 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                     icon: const Icon(Icons.check_rounded, size: 16),
                     label: const Text('Onayla & Vardiyaları Değiştir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF10B981),
-                      foregroundColor: Colors.white,
+                      backgroundColor: neonEmerald,
+                      foregroundColor: Colors.black,
                       elevation: 0,
-                      padding: const EdgeInsets.symmetric(vertical: 10),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                     ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                ElevatedButton.icon(
+                ElevatedButton(
                   onPressed: () => _rejectSwapRequest(swap),
-                  icon: const Icon(Icons.close_rounded, size: 16),
-                  label: const Text('Reddet', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11)),
                   style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFFEF4444),
-                    foregroundColor: Colors.white,
+                    backgroundColor: laserCrimson.withValues(alpha: 0.15),
+                    foregroundColor: laserCrimson,
                     elevation: 0,
-                    padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                   ),
+                  child: const Text('Reddet'),
                 ),
               ],
             ),
@@ -2244,16 +1823,16 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('✅ Vardiyalar başarıyla takas edildi ve personellere bildirim gönderildi!'),
-          backgroundColor: Color(0xFF10B981),
-        ),
+      _showExecutiveSnackBar(
+        title: 'Vardiya Takası Onaylandı',
+        message: 'Her iki personelin vardiyası güncellendi ve bildirim iletildi.',
+        color: neonEmerald,
+        icon: Icons.check_circle_rounded,
       );
       _fetchData();
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Takas onaylama hatası: $e')));
+        _showExecutiveSnackBar(title: 'Hata', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
       }
     }
   }
@@ -2272,17 +1851,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
       }
 
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Vardiya takas talebi reddedildi.'),
-          backgroundColor: Color(0xFFEF4444),
-        ),
-      );
+      _showExecutiveSnackBar(title: 'Takas Reddedildi', message: 'Talep iptal edildi.', color: laserCrimson, icon: Icons.cancel_rounded);
       _fetchData();
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
-      }
+      if (!mounted) return;
+      _showExecutiveSnackBar(title: 'Hata', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
     }
   }
 
@@ -2296,40 +1869,40 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
         return StatefulBuilder(
           builder: (dialogCtx, setDialogState) {
             return AlertDialog(
-              backgroundColor: const Color(0xFF141722),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20), side: const BorderSide(color: Color(0xFF2A3347))),
+              backgroundColor: cardSurface,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18), side: const BorderSide(color: cardBorder)),
               title: Row(
                 children: [
-                  const Icon(Icons.edit_calendar_rounded, color: Color(0xFF38BDF8), size: 22),
-                  const SizedBox(width: 10),
-                  Text('Vardiya Ata / Değiştir', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
+                  const Icon(Icons.edit_calendar_rounded, color: cyberCyan, size: 20),
+                  const SizedBox(width: 8),
+                  Text('Vardiya Ata / Değiştir', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
                 ],
               ),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Personel Seç:', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8))),
+                  Text('Personel Seç:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
                   const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E2433),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF2E384D)),
+                      color: cardSurfaceElevated,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: cardBorder),
                     ),
                     child: DropdownButtonHideUnderline(
                       child: DropdownButton<String>(
-                        dropdownColor: const Color(0xFF1E2433),
+                        dropdownColor: cardSurfaceElevated,
                         isExpanded: true,
                         value: selectedPersonelId,
-                        hint: const Text('Personel seçiniz', style: TextStyle(color: Color(0xFF64748B), fontSize: 13)),
+                        hint: const Text('Personel seçiniz', style: TextStyle(color: Color(0xFF64748B), fontSize: 12.5)),
                         items: _personeller.map((p) {
                           return DropdownMenuItem<String>(
                             value: p['id'].toString(),
                             child: Text(
-                              '${p['ad_soyad'] ?? 'İsimsiz'} (${p['vardiya'] ?? 'Vardiya Yok'})',
-                              style: const TextStyle(color: Colors.white, fontSize: 12.5),
+                              '${p['ad_soyad'] ?? 'İsimsiz'} (${p['vardiya'] ?? 'Yok'})',
+                              style: const TextStyle(color: Colors.white, fontSize: 12),
                               overflow: TextOverflow.ellipsis,
                             ),
                           );
@@ -2338,26 +1911,26 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                       ),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  Text('Yeni Vardiya:', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8))),
+                  const SizedBox(height: 14),
+                  Text('Yeni Vardiya:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
                   const SizedBox(height: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF1E2433),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: const Color(0xFF2E384D)),
+                      color: cardSurfaceElevated,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(color: cardBorder),
                     ),
                     child: DropdownButtonHideUnderline(
                       child: DropdownButton<String>(
-                        dropdownColor: const Color(0xFF1E2433),
+                        dropdownColor: cardSurfaceElevated,
                         isExpanded: true,
                         value: selectedShift,
                         items: const [
-                          DropdownMenuItem(value: 'Salı Grubu', child: Text('1. Posta (Salı Grubu)', style: TextStyle(color: Colors.white, fontSize: 13))),
-                          DropdownMenuItem(value: 'Çarşamba Grubu', child: Text('2. Posta (Çarşamba Grubu)', style: TextStyle(color: Colors.white, fontSize: 13))),
-                          DropdownMenuItem(value: 'Cuma Grubu', child: Text('3. Posta (Cuma Grubu)', style: TextStyle(color: Colors.white, fontSize: 13))),
-                          DropdownMenuItem(value: 'Cumartesi Grubu', child: Text('4. Posta (Cumartesi Grubu)', style: TextStyle(color: Colors.white, fontSize: 13))),
+                          DropdownMenuItem(value: 'Salı Grubu', child: Text('1. Posta (Salı Grubu)', style: TextStyle(color: Colors.white, fontSize: 12.5))),
+                          DropdownMenuItem(value: 'Çarşamba Grubu', child: Text('2. Posta (Çarşamba Grubu)', style: TextStyle(color: Colors.white, fontSize: 12.5))),
+                          DropdownMenuItem(value: 'Cuma Grubu', child: Text('3. Posta (Cuma Grubu)', style: TextStyle(color: Colors.white, fontSize: 12.5))),
+                          DropdownMenuItem(value: 'Cumartesi Grubu', child: Text('4. Posta (Cumartesi Grubu)', style: TextStyle(color: Colors.white, fontSize: 12.5))),
                         ],
                         onChanged: (val) {
                           if (val != null) setDialogState(() => selectedShift = val);
@@ -2383,21 +1956,21 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                                 .doc(selectedPersonelId)
                                 .update({'vardiya': selectedShift});
                             if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(
-                                  content: Text('Vardiya başarıyla $selectedShift olarak güncellendi!'),
-                                  backgroundColor: const Color(0xFF10B981),
-                                ),
+                              _showExecutiveSnackBar(
+                                title: 'Vardiya Güncellendi',
+                                message: 'Seçilen personele $selectedShift atandı.',
+                                color: neonEmerald,
+                                icon: Icons.check_circle_rounded,
                               );
                               _fetchData();
                             }
                           } catch (e) {
                             if (mounted) {
-                              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Hata: $e')));
+                              _showExecutiveSnackBar(title: 'Hata', message: '$e', color: laserCrimson, icon: Icons.error_outline_rounded);
                             }
                           }
                         },
-                  style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF38BDF8), foregroundColor: Colors.black),
+                  style: ElevatedButton.styleFrom(backgroundColor: cyberCyan, foregroundColor: Colors.black),
                   child: const Text('Kaydet', style: TextStyle(fontWeight: FontWeight.bold)),
                 ),
               ],
@@ -2410,9 +1983,7 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
 
   Future<void> _createSampleSwapRequest() async {
     if (_personeller.length < 2) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('En az 2 personel kayıtlı olmalıdır.')),
-      );
+      _showExecutiveSnackBar(title: 'Yetersiz Personel', message: 'En az 2 kayıtlı personel gereklidir.', color: amberGold, icon: Icons.warning_amber_rounded);
       return;
     }
     final p1 = _personeller[0];
@@ -2428,18 +1999,396 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
       'hedef_personel_cihaz_id': p2['cihaz_id'],
       'hedef_vardiya': p2['vardiya'] ?? 'Cuma Grubu',
       'durum': 'onay_bekliyor',
-      'aciklama': 'Özel ailevi mazeret sebebiyle bu haftalık vardiya değişimi talep ediyorum.',
+      'aciklama': 'Özel mazeret sebebiyle takas talep edilmiştir.',
       'tarih': FieldValue.serverTimestamp(),
     });
 
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test amaçlı örnek takas talebi oluşturuldu!'), backgroundColor: Color(0xFF10B981)),
-    );
+    _showExecutiveSnackBar(title: 'Örnek Talep Oluşturuldu', message: 'Test amaçlı takas talebi listeye eklendi.', color: neonEmerald, icon: Icons.check_circle_rounded);
     _fetchData();
   }
 
-  // ── DETAYLI LOG GEÇMİŞİ MODALI ──
+  // ── SEKME 4: DUYURU YAYINLA ──
+  Widget _buildAnnouncementsTab() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: cardSurface,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: cardBorder),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: laserCrimson.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.campaign_rounded, color: laserCrimson, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Saha & Amir Duyurusu Yayınla', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
+                        Text('OneSignal ile tüm personellere anlık bildirim gider', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: _duyuruTitleCtrl,
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: 'Duyuru Başlığı',
+                  labelStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                  hintText: 'Örn: Vardiya Değişikliği / İSG Uyarısı',
+                  hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                  filled: true,
+                  fillColor: cardSurfaceElevated,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: cardBorder)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: cardBorder)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: laserCrimson)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: _duyuruContentCtrl,
+                maxLines: 3,
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
+                decoration: InputDecoration(
+                  labelText: 'Duyuru İçeriği',
+                  labelStyle: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
+                  hintText: 'Personele iletilecek mesajı yazınız...',
+                  hintStyle: const TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                  filled: true,
+                  fillColor: cardSurfaceElevated,
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: cardBorder)),
+                  enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: cardBorder)),
+                  focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: laserCrimson)),
+                ),
+              ),
+              const SizedBox(height: 10),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: _duyuruIsAlert ? laserCrimson.withValues(alpha: 0.12) : cardSurfaceElevated,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: _duyuruIsAlert ? laserCrimson.withValues(alpha: 0.4) : cardBorder),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.warning_amber_rounded, color: _duyuruIsAlert ? laserCrimson : const Color(0xFF64748B), size: 18),
+                        const SizedBox(width: 8),
+                        Text('Acil Durum (Kırmızı Alarm)', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                      ],
+                    ),
+                    Switch(
+                      value: _duyuruIsAlert,
+                      onChanged: (val) => setState(() => _duyuruIsAlert = val),
+                      activeThumbColor: laserCrimson,
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 14),
+              SizedBox(
+                width: double.infinity,
+                height: 44,
+                child: ElevatedButton.icon(
+                  onPressed: _isSendingDuyuru ? null : _sendDuyuru,
+                  icon: _isSendingDuyuru
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                      : const Icon(Icons.send_rounded, size: 16),
+                  label: Text(_isSendingDuyuru ? 'Yayınlanıyor...' : 'Duyuruyu Yayınla & Push Gönder', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12.5)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: laserCrimson,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    elevation: 0,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 20),
+
+        Text('📋 YAYINDAKİ DUYURULAR (${_duyurular.length})', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w800, color: const Color(0xFF8E9EB5), letterSpacing: 0.5)),
+        const SizedBox(height: 10),
+
+        if (_duyurular.isEmpty)
+          Center(
+            child: Padding(
+              padding: const EdgeInsets.all(30.0),
+              child: Text('Henüz yayınlanmış duyuru yok.', style: GoogleFonts.inter(color: const Color(0xFF64748B))),
+            ),
+          )
+        else
+          ..._duyurular.map((d) {
+            final isAlert = d['is_alert'] == true;
+            return Container(
+              margin: const EdgeInsets.only(bottom: 10),
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: cardSurface,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: isAlert ? laserCrimson.withValues(alpha: 0.5) : cardBorder),
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: (isAlert ? laserCrimson : cyberCyan).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      isAlert ? Icons.warning_rounded : Icons.info_outline_rounded,
+                      color: isAlert ? laserCrimson : cyberCyan,
+                      size: 16,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(child: Text(d['baslik'] ?? '', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.white))),
+                            Text((d['tarih'] ?? '').toString().split('T').first, style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B))),
+                          ],
+                        ),
+                        const SizedBox(height: 4),
+                        Text(d['icerik'] ?? '', style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1), height: 1.3)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline_rounded, color: laserCrimson, size: 18),
+                    onPressed: () => _deleteDuyuru(d['id']),
+                  ),
+                ],
+              ),
+            );
+          }),
+      ],
+    );
+  }
+
+  // ── 📊 Canlı Saha & Vardiya Grafikleri ──
+  Widget _buildAnalyticsSection() {
+    final int inFactory = _personeller.where((p) => p['son_hareket_tipi'] == 'is_giris').length;
+    final int outside = _personeller.length - inFactory;
+    final double inFactoryPercent = _personeller.isEmpty ? 0 : (inFactory / _personeller.length * 100);
+
+    int saliCount = 0;
+    int carsambaCount = 0;
+    int cumaCount = 0;
+    int cumartesiCount = 0;
+    int digerCount = 0;
+
+    for (var p in _personeller) {
+      final v = (p['vardiya'] ?? '').toString().toLowerCase();
+      if (v.contains('sali') || v.contains('salı')) {
+        saliCount++;
+      } else if (v.contains('carsamba') || v.contains('çarşamba')) {
+        carsambaCount++;
+      } else if (v.contains('cuma')) {
+        cumaCount++;
+      } else if (v.contains('cumartesi')) {
+        cumartesiCount++;
+      } else {
+        digerCount++;
+      }
+    }
+
+    final double maxBarVal = [saliCount, carsambaCount, cumaCount, cumartesiCount, 5]
+        .reduce((curr, next) => curr > next ? curr : next)
+        .toDouble() + 2;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cardSurface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: cardBorder),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              SizedBox(
+                width: 80,
+                height: 80,
+                child: Stack(
+                  children: [
+                    PieChart(
+                      PieChartData(
+                        sectionsSpace: 2,
+                        centerSpaceRadius: 24,
+                        sections: [
+                          PieChartSectionData(
+                            value: inFactory.toDouble() > 0 ? inFactory.toDouble() : 0.001,
+                            color: neonEmerald,
+                            radius: 12,
+                            showTitle: false,
+                          ),
+                          PieChartSectionData(
+                            value: outside.toDouble() > 0 ? outside.toDouble() : 0.001,
+                            color: const Color(0xFF263238),
+                            radius: 10,
+                            showTitle: false,
+                          ),
+                        ],
+                      ),
+                    ),
+                    Center(
+                      child: Text(
+                        '%${inFactoryPercent.toInt()}',
+                        style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w900, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Canlı Turnike Saha Durumu', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Container(width: 8, height: 8, decoration: const BoxDecoration(color: neonEmerald, shape: BoxShape.circle)),
+                        const SizedBox(width: 6),
+                        Text('Sahada:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                        const Spacer(),
+                        Text('$inFactory Kişi', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: neonEmerald)),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Container(width: 8, height: 8, decoration: const BoxDecoration(color: Color(0xFF64748B), shape: BoxShape.circle)),
+                        const SizedBox(width: 6),
+                        Text('Dışarıda / İzinli:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                        const Spacer(),
+                        Text('$outside Kişi', style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF94A3B8))),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          const Divider(height: 1, color: cardBorder),
+          const SizedBox(height: 10),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Posta Grupları Dağılımı', style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white)),
+              Text('Toplam ${_personeller.length} Kişi', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B))),
+            ],
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 90,
+            child: BarChart(
+              BarChartData(
+                maxY: maxBarVal,
+                barTouchData: BarTouchData(enabled: true),
+                titlesData: FlTitlesData(
+                  show: true,
+                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
+                  bottomTitles: AxisTitles(
+                    sideTitles: SideTitles(
+                      showTitles: true,
+                      getTitlesWidget: (value, meta) {
+                        String title = '';
+                        switch (value.toInt()) {
+                          case 0:
+                            title = 'Salı';
+                            break;
+                          case 1:
+                            title = 'Çarş.';
+                            break;
+                          case 2:
+                            title = 'Cuma';
+                            break;
+                          case 3:
+                            title = 'Cmt.';
+                            break;
+                          case 4:
+                            title = 'Diğer';
+                            break;
+                        }
+                        return Padding(
+                          padding: const EdgeInsets.only(top: 4),
+                          child: Text(title, style: GoogleFonts.inter(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF8E9EB5))),
+                        );
+                      },
+                    ),
+                  ),
+                ),
+                gridData: const FlGridData(show: false),
+                borderData: FlBorderData(show: false),
+                barGroups: [
+                  _buildBarGroup(0, saliCount.toDouble(), amberGold),
+                  _buildBarGroup(1, carsambaCount.toDouble(), electricViolet),
+                  _buildBarGroup(2, cumaCount.toDouble(), cyberCyan),
+                  _buildBarGroup(3, cumartesiCount.toDouble(), neonEmerald),
+                  _buildBarGroup(4, digerCount.toDouble(), const Color(0xFF64748B)),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  BarChartGroupData _buildBarGroup(int x, double y, Color color) {
+    return BarChartGroupData(
+      x: x,
+      barRods: [
+        BarChartRodData(
+          toY: y,
+          color: color,
+          width: 14,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(5)),
+          backDrawRodData: BackgroundBarChartRodData(
+            show: true,
+            toY: 10,
+            color: const Color(0xFF141926),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ── Kullanıcı Log Geçmişi Modalı ──
   void _showUserLogHistory(String name, List<dynamic> logs) {
     final sorted = List<dynamic>.from(logs)..sort((a, b) {
       try {
@@ -2453,11 +2402,11 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF141722),
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      backgroundColor: cardSurface,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(22))),
       builder: (context) {
         return Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+          padding: const EdgeInsets.all(18),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -2467,8 +2416,8 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('$name — Oturum Geçmişi', style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-                      Text('Toplam ${sorted.length} kayıtlı işlem', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                      Text('$name — Oturum Geçmişi', style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white)),
+                      Text('Toplam ${sorted.length} turnike kaydı', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
                     ],
                   ),
                   IconButton(
@@ -2477,36 +2426,51 @@ class _YetkiliScreenState extends State<YetkiliScreen> with SingleTickerProvider
                   ),
                 ],
               ),
-              const Divider(color: Color(0xFF272A36)),
+              const Divider(color: cardBorder),
               Expanded(
                 child: ListView.builder(
                   itemCount: sorted.length,
                   itemBuilder: (context, index) {
                     final l = sorted[index];
                     final isGiris = (l['islem_tipi'] ?? '').toString().toLowerCase().contains('giris');
+                    final hasCoords = l['latitude'] != null && l['longitude'] != null;
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
-                      padding: const EdgeInsets.all(12),
+                      padding: const EdgeInsets.all(10),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0D0F15),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF272A36)),
+                        color: cardSurfaceElevated,
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: cardBorder),
                       ),
                       child: Row(
                         children: [
-                          Icon(isGiris ? Icons.login_rounded : Icons.logout_rounded, color: isGiris ? const Color(0xFF10B981) : const Color(0xFFEF4444), size: 18),
-                          const SizedBox(width: 12),
+                          Icon(isGiris ? Icons.login_rounded : Icons.logout_rounded, color: isGiris ? neonEmerald : laserCrimson, size: 16),
+                          const SizedBox(width: 10),
                           Expanded(
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Text(isGiris ? 'Uygulamaya Giriş Yapıldı' : 'Uygulamadan Çıkış Yapıldı', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
-                                if (l['latitude'] != null && l['longitude'] != null)
-                                  Text('GPS: ${l['latitude']}, ${l['longitude']}', style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF64748B))),
+                                Text(isGiris ? 'Fabrikaya Giriş Yapıldı' : 'Fabrikadan Çıkış Yapıldı', style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white)),
+                                if (hasCoords)
+                                  GestureDetector(
+                                    onTap: () async {
+                                      final uri = Uri.parse('https://www.google.com/maps/search/?api=1&query=${l['latitude']},${l['longitude']}');
+                                      if (await canLaunchUrl(uri)) {
+                                        await launchUrl(uri, mode: LaunchMode.externalApplication);
+                                      }
+                                    },
+                                    child: Row(
+                                      children: [
+                                        const Icon(Icons.location_on_rounded, size: 11, color: cyberCyan),
+                                        const SizedBox(width: 3),
+                                        Text('Konumu Haritada Gör', style: GoogleFonts.inter(fontSize: 10, color: cyberCyan, decoration: TextDecoration.underline)),
+                                      ],
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
-                          Text('${l['tarih']} ${l['saat']}', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                          Text('${l['tarih']} ${l['saat']}', style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8))),
                         ],
                       ),
                     );

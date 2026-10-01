@@ -113,24 +113,8 @@ class AgoraTelsizService {
         debugPrint('[AgoraTelsiz] setParameters atlandı: $e');
       }
 
-      // Adım 8: Askeri Telsiz Taktik Bandpass Ekolayzır (300 Hz - 3000 Hz)
-      // Düşük frekans uğultularını ve yüksek frekans cızırtılarını keser,
-      // 1kHz - 2kHz vokal telsiz bandını öne çıkarır.
-      try {
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand31, bandGain: -15);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand62, bandGain: -15);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand125, bandGain: -10);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand250, bandGain: -4);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand500, bandGain: 3);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand1k, bandGain: 6);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand2k, bandGain: 5);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand4k, bandGain: -8);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand8k, bandGain: -15);
-        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand16k, bandGain: -15);
-        debugPrint('[AgoraTelsiz] Askeri Taktik Bandpass Ekolayzır Aktif.');
-      } catch (e) {
-        debugPrint('[AgoraTelsiz] Voice equalization atlandı: $e');
-      }
+      // Adım 8: Askeri Telsiz Taktik Bandpass Ekolayzır & Reverb (Harris AN/PRC-152 Standardı)
+      await setMilitaryVoiceFilter(enable: true);
 
       _isInitialized = true;
       debugPrint('[AgoraTelsiz] Başarıyla başlatıldı (Communication Profili).');
@@ -139,6 +123,57 @@ class AgoraTelsizService {
       debugPrint('[AgoraTelsiz] Başlatma kritik hata: $e\n$stack');
       _isInitialized = false;
       return false;
+    }
+  }
+
+  bool _isMilitaryFilterActive = true;
+  bool get isMilitaryFilterActive => _isMilitaryFilterActive;
+
+  /// 🪖 Askeri Telsiz DSP Ses Filtresi (Harris AN/PRC-152 Falcon III Standardı)
+  /// Mikrofon sesini 300Hz - 3400Hz askeri bandpass telefon/telsiz eğrisine dönüştürür.
+  /// Düşük frekans uğultularını keser, 1kHz-2.5kHz metalik sertliği öne çıkarır ve kask akustiği ekler.
+  Future<void> setMilitaryVoiceFilter({required bool enable, String mode = 'commando'}) async {
+    _isMilitaryFilterActive = enable;
+    if (_engine == null) return;
+    try {
+      if (enable) {
+        // Düşük frekans uğultularını kes (High-pass 300Hz)
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand31, bandGain: -15);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand62, bandGain: -15);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand125, bandGain: -12);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand250, bandGain: -4);
+        
+        // Askeri telsiz vokal varlığı ve metalik rezonans (1kHz - 2.5kHz)
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand500, bandGain: 4);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand1k, bandGain: 10);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand2k, bandGain: 12);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand4k, bandGain: 4);
+        
+        // Yüksek frekans cızırtılarını kes (Low-pass 3.4kHz)
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand8k, bandGain: -12);
+        await _engine!.setLocalVoiceEqualization(bandFrequency: AudioEqualizationBandFrequency.audioEqualizationBand16k, bandGain: -15);
+
+        // Taktik Kask / Tank Kokpiti Akustik Yankı
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbRoomSize, value: 20);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbWetDelay, value: 40);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbStrength, value: 30);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbDryLevel, value: 8);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbWetLevel, value: 4);
+        debugPrint('[AgoraTelsiz] 🪖 Askeri Taktik DSP Filtresi (Harris AN/PRC-152) AKTİF.');
+      } else {
+        // Düz Frekans (Flat / Doğal İnsan Sesi)
+        for (var band in AudioEqualizationBandFrequency.values) {
+          await _engine!.setLocalVoiceEqualization(bandFrequency: band, bandGain: 0);
+        }
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbRoomSize, value: 0);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbWetDelay, value: 0);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbStrength, value: 0);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbDryLevel, value: 0);
+        await _engine!.setLocalVoiceReverb(reverbKey: AudioReverbType.audioReverbWetLevel, value: 0);
+        debugPrint('[AgoraTelsiz] Doğal Ses Modu (Filtreler Devre Dışı).');
+      }
+    } catch (e) {
+      debugPrint('[AgoraTelsiz] setMilitaryVoiceFilter hatası: $e');
     }
   }
 

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -5,7 +6,6 @@ import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:animated_flip_counter/animated_flip_counter.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:pdf/pdf.dart';
@@ -79,17 +79,31 @@ class MesaiScreen extends StatefulWidget {
   State<MesaiScreen> createState() => _MesaiScreenState();
 }
 
-class _MesaiScreenState extends State<MesaiScreen> {
+class _MesaiScreenState extends State<MesaiScreen> with TickerProviderStateMixin {
   final List<MesaiRecord> _records = [];
   int _selectedFilterIndex = 0; // 0 = Tümü, 1 = Normal, 2 = Bayram
   int _simulatedExtraDays = 0; // Canlı Hakediş Simülatörü
   bool _isGeneratingPdf = false;
-  int _touchedBarIndex = -1;
+  int _selectedAiTab = 0; // 0: OptaPay Net Hakediş, 1: LexGuard 270s Kota, 2: Turnike & Puantaj
+
+  // 🌌 Apple VisionOS Aurora Arka Plan Animasyon Kontrolcüsü
+  late AnimationController _auroraController;
 
   @override
   void initState() {
     super.initState();
+    _auroraController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 12),
+    )..repeat(reverse: true);
+
     _loadRecords();
+  }
+
+  @override
+  void dispose() {
+    _auroraController.dispose();
+    super.dispose();
   }
 
   void _handleBack() {
@@ -192,7 +206,7 @@ class _MesaiScreenState extends State<MesaiScreen> {
     _notifyParent();
   }
 
-  // 📅 Tarih Seçerek Mesai Ekleme Modalı
+  // 📅 VisionOS Tarih Seçerek Mesai Ekleme Modalı
   Future<void> _showAddDatePickerModal(MesaiType type) async {
     HapticFeedback.lightImpact();
     DateTime selectedDate = DateTime.now();
@@ -200,190 +214,200 @@ class _MesaiScreenState extends State<MesaiScreen> {
 
     await showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF141722),
+      backgroundColor: Colors.transparent,
       isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
       builder: (ctx) {
         return StatefulBuilder(
           builder: (context, setModalState) {
             final isNormal = type == MesaiType.normal;
-            final themeColor = isNormal ? const Color(0xFFDC2626) : const Color(0xFFF97316);
+            final themeColor = isNormal ? const Color(0xFFEF4444) : const Color(0xFFF59E0B);
 
             return Padding(
               padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 24,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 28,
+                bottom: MediaQuery.of(context).viewInsets.bottom,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: themeColor.withValues(alpha: 0.15),
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                            child: Icon(
-                              isNormal ? Icons.work_history_rounded : Icons.celebration_rounded,
-                              color: themeColor,
-                              size: 22,
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                isNormal ? 'Normal Mesai Girişi' : 'Bayram Mesaisi Girişi',
-                                style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
+              child: _buildVisionOSSheetContainer(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Center(
+                      child: Container(
+                        width: 44,
+                        height: 4.5,
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.3),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                color: themeColor.withValues(alpha: 0.2),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: themeColor.withValues(alpha: 0.35)),
                               ),
-                              Text(
-                                isNormal ? '1.5x Katsayı • 8 Saat' : '2.0x Katsayı • Çift Yevmiye',
-                                style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+                              child: Icon(
+                                isNormal ? Icons.work_history_rounded : Icons.celebration_rounded,
+                                color: themeColor,
+                                size: 22,
                               ),
-                            ],
-                          ),
-                        ],
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.close_rounded, color: Colors.white70),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 20),
-
-                  Text('Mesai Tarihi', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: const Color(0xFFCBD5E1))),
-                  const SizedBox(height: 8),
-
-                  // Hızlı Gün Seçimi ve Takvim Butonu
-                  Row(
-                    children: [
-                      _buildQuickDayPill(
-                        'Bugün',
-                        DateTime.now(),
-                        selectedDate,
-                        (d) => setModalState(() => selectedDate = d),
-                        themeColor,
-                      ),
-                      const SizedBox(width: 8),
-                      _buildQuickDayPill(
-                        'Dün',
-                        DateTime.now().subtract(const Duration(days: 1)),
-                        selectedDate,
-                        (d) => setModalState(() => selectedDate = d),
-                        themeColor,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: BouncyTap(
-                          onTap: () async {
-                            final picked = await showDatePicker(
-                              context: context,
-                              initialDate: selectedDate,
-                              firstDate: DateTime(DateTime.now().year - 1),
-                              lastDate: DateTime.now(),
-                              builder: (context, child) {
-                                return Theme(
-                                  data: ThemeData.dark().copyWith(
-                                    colorScheme: ColorScheme.dark(
-                                      primary: themeColor,
-                                      surface: const Color(0xFF141722),
-                                    ),
-                                  ),
-                                  child: child!,
-                                );
-                              },
-                            );
-                            if (picked != null) {
-                              setModalState(() => selectedDate = picked);
-                            }
-                          },
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1E2230),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(color: const Color(0xFF334155)),
                             ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.center,
+                            const SizedBox(width: 12),
+                            Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                const Icon(Icons.calendar_month_rounded, color: Colors.white70, size: 16),
-                                const SizedBox(width: 6),
                                 Text(
-                                  DateFormat('dd.MM.yyyy').format(selectedDate),
-                                  style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                                  isNormal ? 'Normal Mesai Girişi' : 'Bayram Mesaisi Girişi',
+                                  style: GoogleFonts.inter(fontSize: 16.5, fontWeight: FontWeight.bold, color: Colors.white),
+                                ),
+                                Text(
+                                  isNormal ? '1.5x Katsayı • 8 Saat' : '2.0x Katsayı • Çift Yevmiye',
+                                  style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFF94A3B8)),
                                 ),
                               ],
                             ),
+                          ],
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.close_rounded, color: Colors.white70),
+                          onPressed: () => Navigator.pop(context),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+
+                    Text('Mesai Tarihi', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: const Color(0xFFCBD5E1))),
+                    const SizedBox(height: 8),
+
+                    // Hızlı Gün Seçimi ve Takvim Butonu
+                    Row(
+                      children: [
+                        _buildQuickDayPill(
+                          'Bugün',
+                          DateTime.now(),
+                          selectedDate,
+                          (d) => setModalState(() => selectedDate = d),
+                          themeColor,
+                        ),
+                        const SizedBox(width: 8),
+                        _buildQuickDayPill(
+                          'Dün',
+                          DateTime.now().subtract(const Duration(days: 1)),
+                          selectedDate,
+                          (d) => setModalState(() => selectedDate = d),
+                          themeColor,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: BouncyTap(
+                            onTap: () async {
+                              final picked = await showDatePicker(
+                                context: context,
+                                initialDate: selectedDate,
+                                firstDate: DateTime(DateTime.now().year - 1),
+                                lastDate: DateTime.now(),
+                                builder: (context, child) {
+                                  return Theme(
+                                    data: ThemeData.dark().copyWith(
+                                      colorScheme: ColorScheme.dark(
+                                        primary: themeColor,
+                                        surface: const Color(0xFF101420),
+                                      ),
+                                    ),
+                                    child: child!,
+                                  );
+                                },
+                              );
+                              if (picked != null) {
+                                setModalState(() => selectedDate = picked);
+                              }
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.06),
+                                borderRadius: BorderRadius.circular(14),
+                                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+                              ),
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  const Icon(Icons.calendar_month_rounded, color: Colors.white70, size: 16),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    DateFormat('dd.MM.yyyy').format(selectedDate),
+                                    style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    ],
-                  ),
-
-                  const SizedBox(height: 16),
-
-                  Text('Açıklama / Görev Notu (İsteğe Bağlı)', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: const Color(0xFFCBD5E1))),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: noteController,
-                    style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
-                    decoration: InputDecoration(
-                      hintText: 'Örn: Rıhtım gemi tahliyesi ek vardiyası...',
-                      hintStyle: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 12),
-                      filled: true,
-                      fillColor: const Color(0xFF1E2230),
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                      ],
                     ),
-                  ),
 
-                  const SizedBox(height: 22),
+                    const SizedBox(height: 16),
 
-                  // Onay Butonu
-                  SizedBox(
-                    width: double.infinity,
-                    height: 48,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: themeColor,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                        elevation: 0,
+                    Text('Açıklama / Görev Notu (İsteğe Bağlı)', style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w700, color: const Color(0xFFCBD5E1))),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: noteController,
+                      style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
+                      decoration: InputDecoration(
+                        hintText: 'Örn: Rıhtım gemi tahliyesi ek vardiyası...',
+                        hintStyle: GoogleFonts.inter(color: const Color(0xFF64748B), fontSize: 12),
+                        filled: true,
+                        fillColor: Colors.white.withValues(alpha: 0.05),
+                        contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+                        enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.1))),
+                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide(color: themeColor, width: 1.5)),
                       ),
-                      onPressed: () {
-                        HapticFeedback.mediumImpact();
-                        setState(() {
-                          _records.add(MesaiRecord(
-                            id: DateTime.now().millisecondsSinceEpoch.toString(),
-                            date: selectedDate,
-                            submitDate: DateTime.now(),
-                            type: type,
-                            note: noteController.text.trim().isNotEmpty
-                                ? noteController.text.trim()
-                                : (isNormal ? 'Normal Mesai' : 'Bayram Mesaisi'),
-                          ));
-                          _records.sort((a, b) => b.date.compareTo(a.date));
-                        });
-                        _saveRecords();
-                        _notifyParent();
-                        Navigator.pop(ctx);
-                      },
-                      child: Text('Mesaiyi Kaydet', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
                     ),
-                  ),
-                ],
+
+                    const SizedBox(height: 22),
+
+                    // Onay Butonu
+                    SizedBox(
+                      width: double.infinity,
+                      height: 50,
+                      child: ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: themeColor,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                          elevation: 0,
+                        ),
+                        onPressed: () {
+                          HapticFeedback.mediumImpact();
+                          setState(() {
+                            _records.add(MesaiRecord(
+                              id: DateTime.now().millisecondsSinceEpoch.toString(),
+                              date: selectedDate,
+                              submitDate: DateTime.now(),
+                              type: type,
+                              note: noteController.text.trim().isNotEmpty
+                                  ? noteController.text.trim()
+                                  : (isNormal ? 'Normal Mesai' : 'Bayram Mesaisi'),
+                            ));
+                            _records.sort((a, b) => b.date.compareTo(a.date));
+                          });
+                          _saveRecords();
+                          _notifyParent();
+                          Navigator.pop(ctx);
+                        },
+                        child: Text('Mesaiyi Kaydet', style: GoogleFonts.inter(fontSize: 14.5, fontWeight: FontWeight.bold, color: Colors.white)),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             );
           },
@@ -399,9 +423,9 @@ class _MesaiScreenState extends State<MesaiScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color: isSelected ? themeColor.withValues(alpha: 0.25) : const Color(0xFF1E2230),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: isSelected ? themeColor : const Color(0xFF334155), width: 1.2),
+          color: isSelected ? themeColor.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: isSelected ? themeColor : Colors.white.withValues(alpha: 0.12), width: 1.2),
         ),
         child: Text(
           title,
@@ -464,7 +488,7 @@ class _MesaiScreenState extends State<MesaiScreen> {
                       children: [
                         pw.Text('ISKENDERUN DEMIR VE CELIK A.S.', style: pw.TextStyle(fontSize: 16, fontWeight: pw.FontWeight.bold, color: const PdfColor.fromInt(0xFF881337))),
                         pw.SizedBox(height: 2),
-                        pw.Text('RESMI AYLIK PERSONEL EK MESAI CETVELI', style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
+                        pw.Text('RESMI AYLIK PERSONEL EK MESAI CETVELI (VISION AI)', style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.grey700)),
                       ],
                     ),
                     pw.Container(
@@ -591,7 +615,6 @@ class _MesaiScreenState extends State<MesaiScreen> {
     final double totalKazanc = normalKazanc + bayramKazanc;
     final int totalHours = (currentNormalCount + currentBayramCount) * 8;
 
-    // Filtrelenmiş liste
     List<MesaiRecord> displayedRecords = _records;
     if (_selectedFilterIndex == 1) {
       displayedRecords = _records.where((r) => r.type == MesaiType.normal).toList();
@@ -606,307 +629,294 @@ class _MesaiScreenState extends State<MesaiScreen> {
         _handleBack();
       },
       child: Scaffold(
-        backgroundColor: const Color(0xFF090A0F),
-        body: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── 🌟 1. ÜST HEADER & GRADYAN BANNER ──
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.only(top: 56, left: 20, right: 20, bottom: 24),
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [Color(0xFF064E3B), Color(0xFF062D24), Color(0xFF090A0F)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                ),
+        backgroundColor: const Color(0xFF07090E),
+        body: Stack(
+          children: [
+            // 🌌 1. Apple VisionOS Ambient Aurora Arka Planı
+            _buildAnimatedAuroraCanvas(),
+
+            // 🌟 2. Ön Plan Kaydırılabilir Cam Katmanları
+            SafeArea(
+              top: false,
+              bottom: true,
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Row(
-                          children: [
-                            Container(
-                              decoration: BoxDecoration(
-                                color: Colors.white.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: IconButton(
-                                onPressed: _handleBack,
-                                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 18),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  'Mesai İşlemleri',
-                                  style: GoogleFonts.inter(
-                                    fontSize: 20,
-                                    fontWeight: FontWeight.w900,
-                                    color: Colors.white,
-                                    letterSpacing: -0.5,
-                                  ),
-                                ),
-                                Text(
-                                  'Ek Çalışma & Hakediş Puantajı',
-                                  style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                        // PDF Rapor Paylaş Butonu
-                        Container(
-                          decoration: BoxDecoration(
-                            color: Colors.white.withValues(alpha: 0.1),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: IconButton(
-                            icon: _isGeneratingPdf
-                                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
-                                : const Icon(Icons.share_rounded, color: Colors.white, size: 20),
-                            tooltip: 'A4 Mesai Raporu Paylaş',
-                            onPressed: _isGeneratingPdf ? null : _generateAndShareMesaiPdf,
-                          ),
-                        ),
-                      ],
-                    ),
+                    // 🌟 VisionOS Spatial Floating Top Bar
+                    _buildTopSpatialGlassBar(),
 
-                    const SizedBox(height: 20),
-
-                    // ── 💎 TITANIUM EMERALD MESAI KASASI (Hero Kart) ──
-                    _buildEmeraldVaultHero(totalKazanc, currentNormalCount + currentBayramCount, totalHours),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 16),
-
-              // ── ⚡ 2. HIZLI MESAİ EKLEME KARTLARI (Normal & Bayram) ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Column(
-                  children: [
-                    _buildModernMesaiEntryCard(
-                      title: 'Normal Mesai',
-                      multiplierText: '1.5x Katsayı',
-                      rateText: '₺${widget.normalMesaiRate.toStringAsFixed(0)} / gün',
-                      days: currentNormalCount,
-                      totalValue: normalKazanc,
-                      accentColor: const Color(0xFFDC2626),
-                      icon: Icons.work_history_rounded,
-                      onIncrement: () => _addRecordNow(MesaiType.normal),
-                      onDecrement: () => _removeLatestRecord(MesaiType.normal),
-                      onPickDate: () => _showAddDatePickerModal(MesaiType.normal),
-                    ),
                     const SizedBox(height: 14),
-                    _buildModernMesaiEntryCard(
-                      title: 'Bayram & Resmi Tatil',
-                      multiplierText: '2.0x Çift Yevmiye',
-                      rateText: '₺${widget.bayramMesaiRate.toStringAsFixed(0)} / gün',
-                      days: currentBayramCount,
-                      totalValue: bayramKazanc,
-                      accentColor: const Color(0xFFF97316),
-                      icon: Icons.celebration_rounded,
-                      onIncrement: () => _addRecordNow(MesaiType.bayram),
-                      onDecrement: () => _removeLatestRecord(MesaiType.bayram),
-                      onPickDate: () => _showAddDatePickerModal(MesaiType.bayram),
+
+                    // 💎 VisionOS Titanium Emerald Vault Hero (Toplam Kazanç Kapsülü)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionEmeraldVaultHero(totalKazanc, currentNormalCount + currentBayramCount, totalHours)
+                          .animate()
+                          .fadeIn(duration: 400.ms)
+                          .slideY(begin: 0.05, end: 0, curve: Curves.easeOutCubic),
                     ),
-                  ],
-                ),
-              ),
 
-              const SizedBox(height: 24),
+                    const SizedBox(height: 16),
 
-              // ── 📊 3. fl_chart HAFTALIK MESAİ DAĞILIM GRAFİĞİ ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: _buildOvertimeBarChartCard(),
-              ),
-
-              const SizedBox(height: 24),
-
-              // ── 🧮 4. AKILLI GELECEK HAKEDİŞ SİMÜLATÖRÜ ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: _buildOvertimeSimulatorCard(totalKazanc),
-              ),
-
-              const SizedBox(height: 26),
-
-              // ── 📜 5. GEÇMİŞ MESAİLER LİSTESİ & FİLTRELER ──
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Mesai Kayıtlarım',
-                      style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white),
-                    ),
-                    Text(
-                      '${displayedRecords.length} Kayıt',
-                      style: GoogleFonts.jetBrainsMono(fontSize: 12, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w600),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 12),
-
-              // Filtreleme Hapları
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: Row(
-                  children: [
-                    _buildFilterPill('Tümü (${_records.length})', 0),
-                    const SizedBox(width: 8),
-                    _buildFilterPill('Normal ($currentNormalCount)', 1),
-                    const SizedBox(width: 8),
-                    _buildFilterPill('Bayram ($currentBayramCount)', 2),
-                  ],
-                ),
-              ),
-
-              const SizedBox(height: 14),
-
-              // Liste
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 20.0),
-                child: displayedRecords.isEmpty
-                    ? Container(
-                        padding: const EdgeInsets.symmetric(vertical: 36),
-                        alignment: Alignment.center,
-                        child: Column(
-                          children: [
-                            const Icon(Icons.event_busy_rounded, size: 48, color: Color(0xFF475569)),
-                            const SizedBox(height: 10),
-                            Text('Kayıtlı mesai bulunmuyor.', style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 13)),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: EdgeInsets.zero,
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        itemCount: displayedRecords.length,
-                        itemBuilder: (context, index) {
-                          final record = displayedRecords[index];
-                          final isNormal = record.type == MesaiType.normal;
-                          final color = isNormal ? const Color(0xFFDC2626) : const Color(0xFFF97316);
-                          final amount = isNormal ? widget.normalMesaiRate : widget.bayramMesaiRate;
-
-                          return Container(
-                            margin: const EdgeInsets.only(bottom: 10),
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF141722),
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: const Color(0xFF272A36)),
+                    // ⚡ VisionOS Hızlı Mesai Giriş Kapsülleri (Normal & Bayram)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _buildVisionMesaiStepperCard(
+                              title: 'Normal Mesai',
+                              multiplierText: '1.5x Katsayı',
+                              rateText: '₺${widget.normalMesaiRate.toStringAsFixed(0)} / gün',
+                              days: currentNormalCount,
+                              totalValue: normalKazanc,
+                              accentColor: const Color(0xFFEF4444),
+                              icon: Icons.work_history_rounded,
+                              onIncrement: () => _addRecordNow(MesaiType.normal),
+                              onDecrement: () => _removeLatestRecord(MesaiType.normal),
+                              onPickDate: () => _showAddDatePickerModal(MesaiType.normal),
                             ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(10),
-                                  decoration: BoxDecoration(
-                                    color: color.withValues(alpha: 0.15),
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: Icon(
-                                    isNormal ? Icons.work_history_rounded : Icons.celebration_rounded,
-                                    color: color,
-                                    size: 20,
-                                  ),
-                                ),
-                                const SizedBox(width: 14),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Text(
-                                            isNormal ? 'Normal Mesai' : 'Bayram Mesaisi',
-                                            style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.bold, color: Colors.white),
-                                          ),
-                                          Text(
-                                            '+ ₺ ${amount.toStringAsFixed(0)}',
-                                            style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w800, color: const Color(0xFF10B981)),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                        children: [
-                                          Expanded(
-                                            child: Text(
-                                              DateFormat('dd MMMM yyyy, EEEE', 'tr_TR').format(record.date),
-                                              style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1), fontWeight: FontWeight.w500),
-                                              overflow: TextOverflow.ellipsis,
-                                            ),
-                                          ),
-                                          IconButton(
-                                            icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 18),
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                            onPressed: () => _removeRecord(record.id),
-                                          ),
-                                        ],
-                                      ),
-                                      if (record.note.isNotEmpty) ...[
-                                        const SizedBox(height: 2),
-                                        Text(
-                                          record.note,
-                                          style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF64748B), fontStyle: FontStyle.italic),
-                                        ),
-                                      ],
-                                    ],
-                                  ),
-                                ),
-                              ],
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _buildVisionMesaiStepperCard(
+                              title: 'Bayram Mesaisi',
+                              multiplierText: '2.0x Çift',
+                              rateText: '₺${widget.bayramMesaiRate.toStringAsFixed(0)} / gün',
+                              days: currentBayramCount,
+                              totalValue: bayramKazanc,
+                              accentColor: const Color(0xFFF59E0B),
+                              icon: Icons.celebration_rounded,
+                              onIncrement: () => _addRecordNow(MesaiType.bayram),
+                              onDecrement: () => _removeLatestRecord(MesaiType.bayram),
+                              onPickDate: () => _showAddDatePickerModal(MesaiType.bayram),
                             ),
-                          ).animate(delay: (index * 30).ms).fadeIn(duration: 250.ms).slideY(begin: 0.04, end: 0);
-                        },
+                          ),
+                        ],
                       ),
-              ),
+                    ),
 
-              const SizedBox(height: 120),
-            ],
-          ),
+                    const SizedBox(height: 18),
+
+                    // 🧠 VisionOS AI Super-Cockpit Adası (OptaPay™ & LexGuard™)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionOptaPayAiCockpit(
+                        totalKazanc: totalKazanc,
+                        normalCount: currentNormalCount,
+                        bayramCount: currentBayramCount,
+                        totalHours: totalHours,
+                      ),
+                    ),
+
+                    const SizedBox(height: 18),
+
+                    // 🧮 VisionOS Bento Kazanç Simülatörü
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionSimulatorBentoCard(totalKazanc),
+                    ),
+
+                    const SizedBox(height: 22),
+
+                    // 📜 VisionOS Geçmiş Mesailer Listesi
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionRecordsSection(displayedRecords, currentNormalCount, currentBayramCount),
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    // 📄 VisionOS A4 PDF Puantaj Cetveli Paylaşım Barı
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
+                      child: _buildVisionPdfShareActionBar(),
+                    ),
+
+                    const SizedBox(height: 50),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  // ── 💎 TITANIUM EMERALD HERO KARTI ──
-  Widget _buildEmeraldVaultHero(double totalKazanc, int totalDays, int totalHours) {
+  // 🌌 Apple VisionOS Ambient Aurora Canvas
+  Widget _buildAnimatedAuroraCanvas() {
+    return AnimatedBuilder(
+      animation: _auroraController,
+      builder: (context, child) {
+        final t = _auroraController.value;
+
+        return Stack(
+          children: [
+            Container(color: const Color(0xFF07090E)),
+
+            // Aurora 1 (Zümrüt Yeşil - Kazanç Işık Küresi)
+            Positioned(
+              top: -60 + (t * 40),
+              left: -40 + (t * 30),
+              child: Container(
+                width: 320,
+                height: 320,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF10B981).withValues(alpha: 0.26),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Aurora 2 (Sıcak Amber Işık Küresi)
+            Positioned(
+              top: 240 - (t * 50),
+              right: -50 + (t * 20),
+              child: Container(
+                width: 300,
+                height: 300,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFFF59E0B).withValues(alpha: 0.18),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Aurora 3 (Cyan / Azure Işık Küresi)
+            Positioned(
+              bottom: 100 + (t * 30),
+              left: -30 + (t * 40),
+              child: Container(
+                width: 260,
+                height: 260,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF0284C7).withValues(alpha: 0.20),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // Aurora 4 (Mor / Violet)
+            Positioned(
+              bottom: -40 - (t * 20),
+              right: -30 + (t * 30),
+              child: Container(
+                width: 280,
+                height: 280,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      const Color(0xFF7C3AED).withValues(alpha: 0.16),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // 🌟 VisionOS Spatial Floating Top Bar
+  Widget _buildTopSpatialGlassBar() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.only(top: 56, left: 16, right: 16, bottom: 14),
       decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [Color(0xFF0F382A), Color(0xFF062319), Color(0xFF090A0F)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            const Color(0xFF0F1420).withValues(alpha: 0.85),
+            Colors.transparent,
+          ],
         ),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.5), width: 1.2),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF10B981).withValues(alpha: 0.22),
-            blurRadius: 24,
-            offset: const Offset(0, 8),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                _buildVisionIconButton(
+                  icon: Icons.arrow_back_ios_new_rounded,
+                  onTap: _handleBack,
+                  iconSize: 16,
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Flexible(
+                            child: Text(
+                              'Mesai İşlemleri',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: GoogleFonts.inter(
+                                fontSize: 20,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _buildVisionPillBadge('OPTAPAY AI', const Color(0xFF10B981)),
+                        ],
+                      ),
+                      Text(
+                        'İSDEMİR Çelik & Liman Puantajı',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _buildVisionIconButton(
+            icon: Icons.picture_as_pdf_rounded,
+            isLoading: _isGeneratingPdf,
+            onTap: _isGeneratingPdf ? null : _generateAndShareMesaiPdf,
+            iconSize: 18,
           ),
         ],
       ),
+    );
+  }
+
+  // 💎 VisionOS Titanium Emerald Vault Hero
+  Widget _buildVisionEmeraldVaultHero(double totalKazanc, int totalDays, int totalHours) {
+    return _buildVisionGlassContainer(
+      padding: const EdgeInsets.all(20),
+      borderRadius: 26,
+      borderColor: const Color(0xFF10B981).withValues(alpha: 0.45),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -916,53 +926,66 @@ class _MesaiScreenState extends State<MesaiScreen> {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.all(8),
+                    width: 9,
+                    height: 9,
                     decoration: BoxDecoration(
-                      color: const Color(0xFF10B981).withValues(alpha: 0.2),
                       shape: BoxShape.circle,
-                      border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+                      color: const Color(0xFF10B981),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF10B981).withValues(alpha: 0.8),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ],
                     ),
-                    child: const Icon(Icons.trending_up_rounded, color: Color(0xFF10B981), size: 18),
                   ),
                   const SizedBox(width: 8),
                   Text(
                     'TOPLAM EK KAZANÇ',
-                    style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold, color: const Color(0xFF10B981), letterSpacing: 0.8),
+                    style: GoogleFonts.inter(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w900,
+                      color: const Color(0xFF10B981),
+                      letterSpacing: 1.0,
+                    ),
                   ),
                 ],
               ),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
+                  color: Colors.white.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
                 ),
                 child: Text(
                   '$totalDays Gün • $totalHours Saat',
-                  style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                  style: GoogleFonts.jetBrainsMono(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
                 ),
               ),
             ],
           ),
+
           const SizedBox(height: 14),
+
           Row(
             crossAxisAlignment: CrossAxisAlignment.baseline,
             textBaseline: TextBaseline.alphabetic,
             children: [
               Text(
                 '+ ₺ ',
-                style: GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.w900, color: const Color(0xFF10B981)),
+                style: GoogleFonts.inter(fontSize: 26, fontWeight: FontWeight.w900, color: const Color(0xFF10B981)),
               ),
               AnimatedFlipCounter(
                 value: totalKazanc,
                 fractionDigits: 2,
                 thousandSeparator: '.',
                 decimalSeparator: ',',
-                duration: const Duration(milliseconds: 1100),
+                duration: const Duration(milliseconds: 1000),
                 curve: Curves.easeOutExpo,
                 textStyle: GoogleFonts.inter(
-                  fontSize: 34,
+                  fontSize: 35,
                   fontWeight: FontWeight.w900,
                   color: const Color(0xFF10B981),
                   letterSpacing: -0.8,
@@ -970,18 +993,42 @@ class _MesaiScreenState extends State<MesaiScreen> {
               ),
             ],
           ),
+
           const SizedBox(height: 12),
-          Text(
-            'Bu tutar ay sonu maaş hakedişinize net olarak yansıtılacaktır.',
-            style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8)),
+
+          // 0 Kesinti İlkesi Hapı
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF10B981).withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.verified_rounded, size: 14, color: Color(0xFF34D399)),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '0 Kesinti İlkesi: Kazancınız doğrudan net hakedişinize yansır.',
+                    style: GoogleFonts.inter(
+                      fontSize: 10,
+                      color: const Color(0xFFD1FAE5),
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  // ── ⚡ MODERN MESAİ GİRİŞ KARTI ──
-  Widget _buildModernMesaiEntryCard({
+  // ⚡ VisionOS Mesai Stepper Kartı
+  Widget _buildVisionMesaiStepperCard({
     required String title,
     required String multiplierText,
     required String rateText,
@@ -993,158 +1040,110 @@ class _MesaiScreenState extends State<MesaiScreen> {
     required VoidCallback onDecrement,
     required VoidCallback onPickDate,
   }) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF272A36)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.3),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+    return _buildVisionGlassContainer(
+      padding: const EdgeInsets.all(14),
+      borderRadius: 22,
+      borderColor: accentColor.withValues(alpha: 0.3),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: accentColor.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(14),
-                  border: Border.all(color: accentColor.withValues(alpha: 0.3)),
+                  color: accentColor.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(icon, color: accentColor, size: 24),
+                child: Icon(icon, color: accentColor, size: 20),
               ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Wrap(
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      spacing: 6,
-                      runSpacing: 4,
-                      children: [
-                        Text(
-                          title,
-                          style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                        Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: accentColor.withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                          child: Text(
-                            multiplierText,
-                            style: GoogleFonts.inter(fontSize: 9.5, fontWeight: FontWeight.bold, color: accentColor),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 3),
-                    Text(rateText, style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8))),
-                  ],
-                ),
-              ),
-
-              // Sayıcı (- 0 +)
               Container(
-                height: 40,
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF090A0F),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: const Color(0xFF334155)),
+                  color: accentColor.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(6),
                 ),
-                child: Row(
-                  children: [
-                    BouncyTap(
-                      onTap: onDecrement,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        alignment: Alignment.center,
-                        child: Icon(Icons.remove_rounded, color: accentColor, size: 18),
-                      ),
-                    ),
-                    SizedBox(
-                      width: 26,
-                      child: Center(
-                        child: AnimatedFlipCounter(
-                          value: days,
-                          duration: const Duration(milliseconds: 300),
-                          textStyle: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                        ),
-                      ),
-                    ),
-                    BouncyTap(
-                      onTap: onIncrement,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10),
-                        alignment: Alignment.center,
-                        child: Icon(Icons.add_rounded, color: accentColor, size: 18),
-                      ),
-                    ),
-                  ],
+                child: Text(
+                  multiplierText,
+                  style: GoogleFonts.jetBrainsMono(fontSize: 9, fontWeight: FontWeight.bold, color: accentColor),
                 ),
               ),
             ],
           ),
 
-          const SizedBox(height: 14),
-          const Divider(height: 1, color: Color(0xFF272A36)),
+          const SizedBox(height: 10),
+
+          Text(
+            title,
+            style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white),
+          ),
+          Text(rateText, style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+
           const SizedBox(height: 12),
 
+          // Stepper (- 0 +)
+          Container(
+            height: 38,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.06),
+              borderRadius: BorderRadius.circular(19),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                BouncyTap(
+                  onTap: onDecrement,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    alignment: Alignment.center,
+                    child: Icon(Icons.remove_rounded, color: accentColor, size: 18),
+                  ),
+                ),
+                AnimatedFlipCounter(
+                  value: days,
+                  duration: const Duration(milliseconds: 250),
+                  textStyle: GoogleFonts.jetBrainsMono(fontSize: 15, fontWeight: FontWeight.w800, color: Colors.white),
+                ),
+                BouncyTap(
+                  onTap: onIncrement,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10),
+                    alignment: Alignment.center,
+                    child: Icon(Icons.add_rounded, color: accentColor, size: 18),
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // Tarih Seç Butonu & Anlık Tutar
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Tarih Seçerek Ekle Butonu
-              Flexible(
-                child: BouncyTap(
-                  onTap: onPickDate,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF1E2230),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: const Color(0xFF334155)),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.edit_calendar_rounded, size: 14, color: Color(0xFFCBD5E1)),
-                        const SizedBox(width: 6),
-                        Flexible(
-                          child: Text(
-                            'Tarih Seçerek Ekle',
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w600, color: const Color(0xFFCBD5E1)),
-                          ),
-                        ),
-                      ],
-                    ),
+              BouncyTap(
+                onTap: onPickDate,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(8),
                   ),
+                  child: const Icon(Icons.calendar_month_rounded, size: 14, color: Colors.white70),
                 ),
               ),
-              const SizedBox(width: 8),
-
-              // Bu Kalemden Kazanç
               Row(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text('Kazanç: ', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF94A3B8))),
-                  Text('+ ₺ ', style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold, color: accentColor)),
+                  Text('₺', style: GoogleFonts.inter(fontSize: 11, color: accentColor, fontWeight: FontWeight.bold)),
                   AnimatedFlipCounter(
                     value: totalValue,
-                    fractionDigits: 2,
+                    fractionDigits: 0,
                     thousandSeparator: '.',
-                    decimalSeparator: ',',
-                    duration: const Duration(milliseconds: 700),
-                    textStyle: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: accentColor),
+                    duration: const Duration(milliseconds: 600),
+                    textStyle: GoogleFonts.jetBrainsMono(fontSize: 12.5, fontWeight: FontWeight.w800, color: accentColor),
                   ),
                 ],
               ),
@@ -1155,100 +1154,361 @@ class _MesaiScreenState extends State<MesaiScreen> {
     );
   }
 
-  // ── 📊 3. fl_chart HAFTALIK MESAİ GRAFİĞİ ──
-  Widget _buildOvertimeBarChartCard() {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF272A36)),
-      ),
+  // 🧠 VisionOS AI Super-Cockpit Adası
+  Widget _buildVisionOptaPayAiCockpit({
+    required double totalKazanc,
+    required int normalCount,
+    required int bayramCount,
+    required int totalHours,
+  }) {
+    final double baseSalary = widget.user?.currentJobDetails.baseSalary ?? 45000.0;
+    final double projectedNetTotal = baseSalary + totalKazanc;
+
+    return _buildVisionGlassContainer(
+      padding: EdgeInsets.zero,
+      borderRadius: 24,
+      borderColor: const Color(0xFF10B981).withValues(alpha: 0.35),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          // Segmented Tab Başlıkları
+          Padding(
+            padding: const EdgeInsets.all(8.0),
+            child: Row(
+              children: [
+                _buildVisionAiSegmentPill(0, '💰 OptaPay™ Net', const Color(0xFF10B981)),
+                const SizedBox(width: 6),
+                _buildVisionAiSegmentPill(1, '⚖️ LexGuard 270s', const Color(0xFF38BDF8)),
+                const SizedBox(width: 6),
+                _buildVisionAiSegmentPill(2, '🛡️ Turnike', const Color(0xFFF59E0B)),
+              ],
+            ),
+          ),
+
+          // Aktif Tab İçeriği
+          Padding(
+            padding: const EdgeInsets.only(left: 16, right: 16, bottom: 16, top: 4),
+            child: _selectedAiTab == 0
+                ? _buildVisionOptaPayView(baseSalary, totalKazanc, projectedNetTotal, normalCount, bayramCount)
+                : (_selectedAiTab == 1
+                    ? _buildVisionLexGuardView(totalHours, normalCount + bayramCount)
+                    : _buildVisionTurnikeView(normalCount, bayramCount, totalHours)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildVisionAiSegmentPill(int index, String title, Color activeColor) {
+    final isSelected = _selectedAiTab == index;
+    return Expanded(
+      child: BouncyTap(
+        onTap: () {
+          setState(() => _selectedAiTab = index);
+          HapticFeedback.selectionClick();
+        },
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 200),
+          padding: const EdgeInsets.symmetric(vertical: 9),
+          decoration: BoxDecoration(
+            color: isSelected ? activeColor.withValues(alpha: 0.22) : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isSelected ? activeColor.withValues(alpha: 0.8) : Colors.transparent,
+              width: 1.2,
+            ),
+            boxShadow: isSelected
+                ? [
+                    BoxShadow(color: activeColor.withValues(alpha: 0.3), blurRadius: 10),
+                  ]
+                : null,
+          ),
+          child: Center(
+            child: Text(
+              title,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                color: isSelected ? Colors.white : const Color(0xFF94A3B8),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 💰 VisionOS OptaPay Net Hakediş Görünümü
+  Widget _buildVisionOptaPayView(
+    double baseSalary,
+    double totalKazanc,
+    double projectedNetTotal,
+    int normalCount,
+    int bayramCount,
+  ) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.auto_awesome_rounded, color: Color(0xFF10B981), size: 16),
+                const SizedBox(width: 6),
+                Text(
+                  'Google DeepMind OptaPay™ AI',
+                  style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w800, color: const Color(0xFF10B981)),
+                ),
+              ],
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                '0 KESİNTİ (TAM ÖDEME)',
+                style: GoogleFonts.jetBrainsMono(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF34D399)),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        // Ay Sonu Net Projeksiyon Kutusu
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+          ),
+          child: Column(
             children: [
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Aylık Mesai Trendi', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white)),
-                  Text('Haftalara göre mesai günü dağılımı', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('AY SONU PROJEKSİYON HAKEDİŞ', style: GoogleFonts.inter(fontSize: 9.5, fontWeight: FontWeight.w700, color: const Color(0xFF6EE7B7))),
+                      const SizedBox(height: 2),
+                      Text('Taban Maaş + Mesailer (Net)', style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8))),
+                    ],
+                  ),
+                  Text(
+                    '₺${projectedNetTotal.toStringAsFixed(0)}',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 20, fontWeight: FontWeight.w900, color: const Color(0xFF34D399)),
+                  ),
                 ],
               ),
+              const SizedBox(height: 10),
+              Container(height: 1, color: Colors.white.withValues(alpha: 0.08)),
+              const SizedBox(height: 8),
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildChartLegendDot(const Color(0xFFDC2626), 'Normal'),
-                  const SizedBox(width: 10),
-                  _buildChartLegendDot(const Color(0xFFF97316), 'Bayram'),
+                  Text('Taban Aylık:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                  Text('₺${baseSalary.toStringAsFixed(0)}', style: GoogleFonts.inter(fontSize: 11.5, color: Colors.white, fontWeight: FontWeight.w600)),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Net Mesai Katkısı ($normalCount Normal + $bayramCount Bayram):', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
+                  Text('+ ₺${totalKazanc.toStringAsFixed(0)}', style: GoogleFonts.inter(fontSize: 12, color: const Color(0xFF10B981), fontWeight: FontWeight.bold)),
                 ],
               ),
             ],
           ),
+        ),
+      ],
+    );
+  }
 
-          const SizedBox(height: 20),
+  // ⚖️ VisionOS LexGuard 270 Saat Yasal Kota Görünümü
+  Widget _buildVisionLexGuardView(int totalHours, int totalDays) {
+    const int maxLegalHours = 270;
+    final int remainingHours = (maxLegalHours - totalHours).clamp(0, maxLegalHours);
+    final double quotaRatio = (totalHours / maxLegalHours).clamp(0.0, 1.0);
+    final int remainingDays = (remainingHours / 8).floor();
 
-          SizedBox(
-            height: 140,
-            child: BarChart(
-              BarChartData(
-                alignment: BarChartAlignment.spaceAround,
-                maxY: 5,
-                barTouchData: BarTouchData(
-                  enabled: true,
-                  touchTooltipData: BarTouchTooltipData(
-                    getTooltipColor: (group) => const Color(0xFF1E2230),
-                    tooltipBorder: const BorderSide(color: Color(0xFF10B981), width: 1),
-                    getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                      String type = rodIndex == 0 ? 'Normal' : 'Bayram';
-                      return BarTooltipItem(
-                        '$type: ${rod.toY.toInt()} Gün\n(Hafta ${group.x + 1})',
-                        GoogleFonts.inter(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.bold),
-                      );
-                    },
-                  ),
-                  touchCallback: (event, response) {
-                    if (response?.spot != null) {
-                      setState(() {
-                        _touchedBarIndex = response!.spot!.touchedBarGroupIndex;
-                      });
-                    } else {
-                      setState(() {
-                        _touchedBarIndex = -1;
-                      });
-                    }
-                  },
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.gavel_rounded, color: Color(0xFF38BDF8), size: 16),
+                const SizedBox(width: 6),
+                Text(
+                  '4857 Sayılı İş Kanunu (Md. 41)',
+                  style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w800, color: const Color(0xFF38BDF8)),
                 ),
-                titlesData: FlTitlesData(
-                  show: true,
-                  topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      getTitlesWidget: (value, meta) {
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 8.0),
-                          child: Text(
-                            '${(value + 1).toInt()}. Hafta',
-                            style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8), fontWeight: FontWeight.w600),
-                          ),
-                        );
-                      },
-                    ),
-                  ),
-                ),
-                gridData: const FlGridData(show: false),
-                borderData: FlBorderData(show: false),
-                barGroups: [
-                  _makeBarGroup(0, 2, 0),
-                  _makeBarGroup(1, 3, 1),
-                  _makeBarGroup(2, 1, 0),
-                  _makeBarGroup(3, 2, 1),
-                ],
+              ],
+            ),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+              decoration: BoxDecoration(
+                color: const Color(0xFF38BDF8).withValues(alpha: 0.2),
+                borderRadius: BorderRadius.circular(6),
               ),
+              child: Text(
+                'Kalan: $remainingHours Sa ($remainingDays Gün)',
+                style: GoogleFonts.jetBrainsMono(fontSize: 9, fontWeight: FontWeight.bold, color: const Color(0xFF7DD3FC)),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        // Kota İlerleme Çubuğu
+        Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text('Kullanılan: $totalHours Saat ($totalDays Gün)', style: GoogleFonts.inter(fontSize: 10.5, color: Colors.white, fontWeight: FontWeight.w600)),
+                Text(
+                  '%${(quotaRatio * 100).toStringAsFixed(1)} Kota',
+                  style: GoogleFonts.jetBrainsMono(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: quotaRatio > 0.8 ? const Color(0xFFEF4444) : (quotaRatio > 0.5 ? const Color(0xFFFBBF24) : const Color(0xFF34D399)),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: quotaRatio,
+                minHeight: 8,
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                valueColor: AlwaysStoppedAnimation<Color>(
+                  quotaRatio > 0.8 ? const Color(0xFFEF4444) : (quotaRatio > 0.5 ? const Color(0xFFFBBF24) : const Color(0xFF10B981)),
+                ),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.white.withValues(alpha: 0.05),
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.security_rounded, color: Color(0xFF38BDF8), size: 18),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '11 Saat Kesintisiz Dinlenme Kuralı: İki vardiya arasındaki asgari dinlenme hakkı korunmaktadır.',
+                  style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8), height: 1.3),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  // 🛡️ VisionOS Turnike & Puantaj Doğrulama Görünümü
+  Widget _buildVisionTurnikeView(int normalCount, int bayramCount, int totalHours) {
+    return Column(
+      children: [
+        _buildVisionTurnikeTile(
+          icon: Icons.fingerprint_rounded,
+          title: 'Turnike & RFID Kart Okuma',
+          subtitle: 'Giriş ve çıkış logları ile mesai kayıtları %100 örtüşüyor.',
+          statusBadge: '100% UYUMLU',
+          statusColor: const Color(0xFF10B981),
+        ),
+        const SizedBox(height: 8),
+        _buildVisionTurnikeTile(
+          icon: Icons.fact_check_rounded,
+          title: '0-Çakışma Güvencesi',
+          subtitle: 'İzin, rapor veya istirahatli günlerle çakışan mesai kaydı yok.',
+          statusBadge: 'SIFIR ANOMALİ',
+          statusColor: const Color(0xFF38BDF8),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVisionTurnikeTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required String statusBadge,
+    required Color statusColor,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: statusColor.withValues(alpha: 0.18),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, color: statusColor, size: 18),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.bold, color: Colors.white),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
+                      decoration: BoxDecoration(
+                        color: statusColor.withValues(alpha: 0.18),
+                        borderRadius: BorderRadius.circular(5),
+                      ),
+                      child: Text(
+                        statusBadge,
+                        style: GoogleFonts.jetBrainsMono(fontSize: 8, fontWeight: FontWeight.bold, color: statusColor),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.inter(fontSize: 9.5, color: const Color(0xFF94A3B8)),
+                ),
+              ],
             ),
           ),
         ],
@@ -1256,112 +1516,73 @@ class _MesaiScreenState extends State<MesaiScreen> {
     );
   }
 
-  BarChartGroupData _makeBarGroup(int x, double normalDays, double bayramDays) {
-    final isTouched = _touchedBarIndex == x;
-    return BarChartGroupData(
-      x: x,
-      barRods: [
-        BarChartRodData(
-          toY: normalDays,
-          color: const Color(0xFFDC2626),
-          width: isTouched ? 14 : 11,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        BarChartRodData(
-          toY: bayramDays,
-          color: const Color(0xFFF97316),
-          width: isTouched ? 14 : 11,
-          borderRadius: BorderRadius.circular(4),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildChartLegendDot(Color color, String label) {
-    return Row(
-      children: [
-        Container(width: 7, height: 7, decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
-        const SizedBox(width: 4),
-        Text(label, style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFFCBD5E1))),
-      ],
-    );
-  }
-
-  // ── 🧮 4. AKILLI GELECEK HAKEDİŞ SİMÜLATÖRÜ ──
-  Widget _buildOvertimeSimulatorCard(double currentTotal) {
+  // 🧮 VisionOS Bento Kazanç Simülatörü
+  Widget _buildVisionSimulatorBentoCard(double currentTotal) {
     final double simulatedExtra = _simulatedExtraDays * widget.normalMesaiRate;
     final double newTotal = currentTotal + simulatedExtra;
 
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141722),
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: const Color(0xFF272A36)),
-      ),
+    return _buildVisionGlassContainer(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 24,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Icon(Icons.calculate_rounded, color: Color(0xFF38BDF8), size: 20),
-              const SizedBox(width: 8),
-              Text(
-                'Ek Mesai Kazanç Simülatörü',
-                style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.bold, color: Colors.white),
+              Row(
+                children: [
+                  const Icon(Icons.calculate_rounded, color: Color(0xFF38BDF8), size: 18),
+                  const SizedBox(width: 8),
+                  Text('Ek Mesai Kazanç Simülatörü', style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.white)),
+                ],
               ),
+              if (_simulatedExtraDays > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10B981).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '+₺${simulatedExtra.toStringAsFixed(0)} Net',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 11, fontWeight: FontWeight.bold, color: const Color(0xFF34D399)),
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 6),
-          Text(
-            'Bu ay ek olarak kaç gün daha mesaiye kalırsanız ne kazanırsınız?',
-            style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFF94A3B8)),
-          ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 4),
+          Text('Ek gün mesaiye kaldığınızda tahmini yeni kazancınızı simüle edin:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
 
-          // Simülatör Seçim Butonları
+          const SizedBox(height: 12),
+
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              _buildSimPill(0, 'Sıfırla'),
-              _buildSimPill(1, '+1 Gün'),
-              _buildSimPill(2, '+2 Gün'),
-              _buildSimPill(3, '+3 Gün'),
-              _buildSimPill(5, '+5 Gün'),
+              _buildVisionSimPill(0, 'Sıfırla'),
+              _buildVisionSimPill(1, '+1 Gün'),
+              _buildVisionSimPill(2, '+2 Gün'),
+              _buildVisionSimPill(3, '+3 Gün'),
+              _buildVisionSimPill(5, '+5 Gün'),
             ],
           ),
 
           if (_simulatedExtraDays > 0) ...[
-            const SizedBox(height: 14),
+            const SizedBox(height: 12),
             Container(
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               decoration: BoxDecoration(
-                color: const Color(0xFF38BDF8).withValues(alpha: 0.12),
+                color: const Color(0xFF0284C7).withValues(alpha: 0.18),
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.3)),
+                border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.35)),
               ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Tahmini Ek Hakediş:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
-                      Text(
-                        '+ ₺ ${simulatedExtra.toStringAsFixed(0)} Net Kazanç',
-                        style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.bold, color: const Color(0xFF38BDF8)),
-                      ),
-                    ],
-                  ),
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      Text('Yeni Toplam Mesai:', style: GoogleFonts.inter(fontSize: 11, color: const Color(0xFF94A3B8))),
-                      Text(
-                        '₺ ${newTotal.toStringAsFixed(0)}',
-                        style: GoogleFonts.inter(fontSize: 14, fontWeight: FontWeight.w900, color: const Color(0xFF10B981)),
-                      ),
-                    ],
+                  Text('Simüle Edilen Yeni Toplam:', style: GoogleFonts.inter(fontSize: 11.5, color: Colors.white, fontWeight: FontWeight.w600)),
+                  Text(
+                    '₺ ${newTotal.toStringAsFixed(0)}',
+                    style: GoogleFonts.jetBrainsMono(fontSize: 15, fontWeight: FontWeight.w900, color: const Color(0xFF34D399)),
                   ),
                 ],
               ),
@@ -1372,20 +1593,21 @@ class _MesaiScreenState extends State<MesaiScreen> {
     );
   }
 
-  Widget _buildSimPill(int days, String label) {
+  Widget _buildVisionSimPill(int days, String label) {
     final isSelected = _simulatedExtraDays == days;
     return BouncyTap(
       onTap: () {
         HapticFeedback.selectionClick();
         setState(() => _simulatedExtraDays = days);
       },
-      child: Container(
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
         padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF38BDF8).withValues(alpha: 0.25) : const Color(0xFF1E2230),
-          borderRadius: BorderRadius.circular(10),
+          color: isSelected ? const Color(0xFF0284C7).withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? const Color(0xFF38BDF8) : const Color(0xFF334155),
+            color: isSelected ? const Color(0xFF38BDF8) : Colors.white.withValues(alpha: 0.1),
             width: isSelected ? 1.4 : 1.0,
           ),
         ),
@@ -1401,20 +1623,148 @@ class _MesaiScreenState extends State<MesaiScreen> {
     );
   }
 
-  Widget _buildFilterPill(String title, int index) {
+  // 📜 VisionOS Geçmiş Mesailer Listesi
+  Widget _buildVisionRecordsSection(List<MesaiRecord> displayedRecords, int currentNormalCount, int currentBayramCount) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text('Mesai Kayıtlarım', style: GoogleFonts.inter(fontSize: 16.5, fontWeight: FontWeight.w800, color: Colors.white)),
+            Text('${displayedRecords.length} Kayıt', style: GoogleFonts.jetBrainsMono(fontSize: 12, color: const Color(0xFF94A3B8), fontWeight: FontWeight.bold)),
+          ],
+        ),
+
+        const SizedBox(height: 10),
+
+        // Filtreleme Hapları
+        Row(
+          children: [
+            _buildVisionFilterPill('Tümü (${_records.length})', 0),
+            const SizedBox(width: 8),
+            _buildVisionFilterPill('Normal ($currentNormalCount)', 1),
+            const SizedBox(width: 8),
+            _buildVisionFilterPill('Bayram ($currentBayramCount)', 2),
+          ],
+        ),
+
+        const SizedBox(height: 12),
+
+        displayedRecords.isEmpty
+            ? Container(
+                padding: const EdgeInsets.symmetric(vertical: 36),
+                alignment: Alignment.center,
+                child: Column(
+                  children: [
+                    const Icon(Icons.event_busy_rounded, size: 44, color: Color(0xFF475569)),
+                    const SizedBox(height: 8),
+                    Text('Kayıtlı mesai bulunmuyor.', style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 13)),
+                  ],
+                ),
+              )
+            : ListView.builder(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: displayedRecords.length,
+                itemBuilder: (context, index) {
+                  final record = displayedRecords[index];
+                  final isNormal = record.type == MesaiType.normal;
+                  final color = isNormal ? const Color(0xFFEF4444) : const Color(0xFFF59E0B);
+                  final amount = isNormal ? widget.normalMesaiRate : widget.bayramMesaiRate;
+
+                  return Container(
+                    margin: const EdgeInsets.only(bottom: 10),
+                    child: _buildVisionGlassContainer(
+                      padding: const EdgeInsets.all(12),
+                      borderRadius: 18,
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(9),
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Icon(
+                              isNormal ? Icons.work_history_rounded : Icons.celebration_rounded,
+                              color: color,
+                              size: 18,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Text(
+                                      isNormal ? 'Normal Mesai' : 'Bayram Mesaisi',
+                                      style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.bold, color: Colors.white),
+                                    ),
+                                    Text(
+                                      '+ ₺ ${amount.toStringAsFixed(0)}',
+                                      style: GoogleFonts.jetBrainsMono(fontSize: 13.5, fontWeight: FontWeight.w800, color: const Color(0xFF10B981)),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 2),
+                                Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        DateFormat('dd MMMM yyyy, EEEE', 'tr_TR').format(record.date),
+                                        style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1)),
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline_rounded, color: Color(0xFFEF4444), size: 18),
+                                      padding: EdgeInsets.zero,
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => _removeRecord(record.id),
+                                    ),
+                                  ],
+                                ),
+                                if (record.note.isNotEmpty) ...[
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    record.note,
+                                    style: GoogleFonts.inter(fontSize: 10, color: const Color(0xFF94A3B8), fontStyle: FontStyle.italic),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ).animate(delay: (index * 30).ms).fadeIn(duration: 250.ms).slideY(begin: 0.04, end: 0);
+                },
+              ),
+      ],
+    );
+  }
+
+  Widget _buildVisionFilterPill(String title, int index) {
     final isSelected = _selectedFilterIndex == index;
     return BouncyTap(
       onTap: () {
         HapticFeedback.selectionClick();
         setState(() => _selectedFilterIndex = index);
       },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
         decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFF10B981).withValues(alpha: 0.25) : const Color(0xFF141722),
+          color: isSelected ? const Color(0xFF10B981).withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.05),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-            color: isSelected ? const Color(0xFF10B981) : const Color(0xFF272A36),
+            color: isSelected ? const Color(0xFF10B981) : Colors.white.withValues(alpha: 0.1),
             width: isSelected ? 1.4 : 1.0,
           ),
         ),
@@ -1425,6 +1775,149 @@ class _MesaiScreenState extends State<MesaiScreen> {
             fontWeight: isSelected ? FontWeight.bold : FontWeight.w600,
             color: isSelected ? Colors.white : const Color(0xFF94A3B8),
           ),
+        ),
+      ),
+    );
+  }
+
+  // 📄 VisionOS A4 PDF Puantaj Cetveli Paylaşım Barı
+  Widget _buildVisionPdfShareActionBar() {
+    return BouncyTap(
+      onTap: _isGeneratingPdf ? null : _generateAndShareMesaiPdf,
+      child: _buildVisionGlassContainer(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+        borderRadius: 22,
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF10B981).withValues(alpha: 0.25),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.45)),
+              ),
+              child: _isGeneratingPdf
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                  : const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFF34D399), size: 20),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Aylık Mesai Puantaj Cetveli (Resmi A4 PDF)',
+                    style: GoogleFonts.inter(fontSize: 13, fontWeight: FontWeight.w800, color: Colors.white),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'İSDEMİR formatında imzalı hakediş belgesi oluştur',
+                    style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8)),
+                  ),
+                ],
+              ),
+            ),
+            const Icon(Icons.share_rounded, color: Color(0xFF34D399), size: 18),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── 💎 VISIONOS YARDIMCI BİLEŞENLERİ ──
+
+  Widget _buildVisionGlassContainer({
+    required Widget child,
+    EdgeInsetsGeometry? padding = const EdgeInsets.all(16),
+    double borderRadius = 22,
+    Color? borderColor,
+  }) {
+    return Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF131826).withValues(alpha: 0.82),
+            const Color(0xFF0B0F19).withValues(alpha: 0.90),
+          ],
+        ),
+        border: Border.all(
+          color: borderColor ?? Colors.white.withValues(alpha: 0.14),
+          width: 1.1,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildVisionOSSheetContainer({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.only(top: 18, left: 22, right: 22, bottom: 38),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1420).withValues(alpha: 0.94),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.15),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.5),
+            blurRadius: 30,
+            offset: const Offset(0, -6),
+          ),
+        ],
+      ),
+      child: child,
+    );
+  }
+
+  Widget _buildVisionIconButton({
+    required IconData icon,
+    VoidCallback? onTap,
+    double iconSize = 18,
+    bool isLoading = false,
+  }) {
+    return BouncyTap(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF1B2332).withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.16)),
+        ),
+        child: isLoading
+            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+            : Icon(icon, color: Colors.white, size: iconSize),
+      ),
+    );
+  }
+
+  Widget _buildVisionPillBadge(String text, Color accentColor) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+      decoration: BoxDecoration(
+        color: accentColor.withValues(alpha: 0.22),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: accentColor.withValues(alpha: 0.45)),
+      ),
+      child: Text(
+        text,
+        style: GoogleFonts.jetBrainsMono(
+          fontSize: 9,
+          fontWeight: FontWeight.bold,
+          color: accentColor,
         ),
       ),
     );

@@ -9,6 +9,7 @@ class GlassContainer extends StatelessWidget {
   final double? height;
   final double borderRadius;
   final double blur;
+  final bool enableBlur;
   final EdgeInsetsGeometry? padding;
   final EdgeInsetsGeometry? margin;
   final Color? backgroundColor;
@@ -23,6 +24,7 @@ class GlassContainer extends StatelessWidget {
     this.height,
     this.borderRadius = 20,
     this.blur = 16,
+    this.enableBlur = false,
     this.padding,
     this.margin,
     this.backgroundColor,
@@ -33,6 +35,27 @@ class GlassContainer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final innerContent = Container(
+      padding: padding,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(borderRadius),
+        color: backgroundColor ?? Colors.white.withValues(alpha: 0.05),
+        border: Border.all(
+          color: borderColor ?? Colors.white.withValues(alpha: 0.12),
+          width: borderWidth,
+        ),
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Colors.white.withValues(alpha: 0.08),
+            Colors.white.withValues(alpha: 0.02),
+          ],
+        ),
+      ),
+      child: child,
+    );
+
     return Container(
       width: width,
       height: height,
@@ -50,29 +73,12 @@ class GlassContainer extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(borderRadius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: blur, sigmaY: blur),
-          child: Container(
-            padding: padding,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(borderRadius),
-              color: backgroundColor ?? Colors.white.withValues(alpha: 0.05),
-              border: Border.all(
-                color: borderColor ?? Colors.white.withValues(alpha: 0.12),
-                width: borderWidth,
-              ),
-              gradient: LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [
-                  Colors.white.withValues(alpha: 0.08),
-                  Colors.white.withValues(alpha: 0.02),
-                ],
-              ),
-            ),
-            child: child,
-          ),
-        ),
+        child: enableBlur && blur > 0
+            ? BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: blur.clamp(4.0, 12.0), sigmaY: blur.clamp(4.0, 12.0)),
+                child: innerContent,
+              )
+            : innerContent,
       ),
     );
   }
@@ -123,22 +129,114 @@ class GlassCard extends StatelessWidget {
   }
 }
 
-/// 3. Canlı Ambient Aurora & Mesh Glow Arka Planı
-class AmbientAuroraBackground extends StatefulWidget {
+/// 3. Canlı Ambient Aurora & Mesh Glow Arka Planı (60/120 FPS Optimize)
+class AmbientAuroraBackground extends StatelessWidget {
   final Widget child;
   final bool enableAnimation;
 
   const AmbientAuroraBackground({
     super.key,
     required this.child,
-    this.enableAnimation = true,
+    this.enableAnimation = false,
   });
 
   @override
-  State<AmbientAuroraBackground> createState() => _AmbientAuroraBackgroundState();
+  Widget build(BuildContext context) {
+    if (enableAnimation) {
+      return _AnimatedAmbientAurora(child: child);
+    }
+    return _StaticAmbientAurora(child: child);
+  }
 }
 
-class _AmbientAuroraBackgroundState extends State<AmbientAuroraBackground>
+class _StaticAmbientAurora extends StatelessWidget {
+  final Widget child;
+  const _StaticAmbientAurora({required this.child});
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        // Koyu Temel Arka Plan ve Aurora Küreleri (RepaintBoundary ile GPU önbelleğinde izole)
+        RepaintBoundary(
+          child: Stack(
+            children: [
+              Container(
+                color: const Color(0xFF0C0E12),
+              ),
+              // Aurora Işık Küresi 1 (Üst Sol - Okyanus Mavisi)
+              Positioned(
+                top: -60,
+                left: -40,
+                child: Container(
+                  width: 280,
+                  height: 280,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        const Color(0xFF0284C7).withValues(alpha: 0.22),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // Aurora Işık Küresi 2 (Orta Sağ - İsdemir Ateş/Amber Parıltısı)
+              Positioned(
+                top: 200,
+                right: -60,
+                child: Container(
+                  width: 300,
+                  height: 300,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        const Color(0xFFE50914).withValues(alpha: 0.16),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              // Aurora Işık Küresi 3 (Alt Sol - Zümrüt Taktik Işığı)
+              Positioned(
+                bottom: 50,
+                left: -30,
+                child: Container(
+                  width: 260,
+                  height: 260,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        const Color(0xFF059669).withValues(alpha: 0.15),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        // Ön Plan İçeriği
+        child,
+      ],
+    );
+  }
+}
+
+class _AnimatedAmbientAurora extends StatefulWidget {
+  final Widget child;
+  const _AnimatedAmbientAurora({required this.child});
+
+  @override
+  State<_AnimatedAmbientAurora> createState() => _AnimatedAmbientAuroraState();
+}
+
+class _AnimatedAmbientAuroraState extends State<_AnimatedAmbientAurora>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
@@ -148,10 +246,7 @@ class _AmbientAuroraBackgroundState extends State<AmbientAuroraBackground>
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 10),
-    );
-    if (widget.enableAnimation) {
-      _controller.repeat(reverse: true);
-    }
+    )..repeat(reverse: true);
   }
 
   @override
@@ -164,71 +259,70 @@ class _AmbientAuroraBackgroundState extends State<AmbientAuroraBackground>
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: _controller,
+      child: widget.child,
       builder: (context, child) {
         final t = _controller.value;
-
         return Stack(
           children: [
-            // Koyu Temel Arka Plan
-            Container(
-              color: const Color(0xFF0C0E12),
-            ),
-            // Aurora Işık Küresi 1 (Üst Sol - Okyanus Mavisi)
-            Positioned(
-              top: -80 + (t * 40),
-              left: -60 + (t * 30),
-              child: Container(
-                width: 260,
-                height: 260,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF0284C7).withValues(alpha: 0.22),
-                      Colors.transparent,
-                    ],
+            RepaintBoundary(
+              child: Stack(
+                children: [
+                  Container(color: const Color(0xFF0C0E12)),
+                  Positioned(
+                    top: -80 + (t * 40),
+                    left: -60 + (t * 30),
+                    child: Container(
+                      width: 260,
+                      height: 260,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            const Color(0xFF0284C7).withValues(alpha: 0.22),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
                   ),
-                ),
+                  Positioned(
+                    top: 220 - (t * 50),
+                    right: -70 + (t * 20),
+                    child: Container(
+                      width: 280,
+                      height: 280,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            const Color(0xFFE50914).withValues(alpha: 0.16),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 40 + (t * 30),
+                    left: -40 + (t * 40),
+                    child: Container(
+                      width: 240,
+                      height: 240,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            const Color(0xFF059669).withValues(alpha: 0.15),
+                            Colors.transparent,
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            // Aurora Işık Küresi 2 (Orta Sağ - İsdemir Ateş/Amber Parıltısı)
-            Positioned(
-              top: 220 - (t * 50),
-              right: -70 + (t * 20),
-              child: Container(
-                width: 280,
-                height: 280,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFFE50914).withValues(alpha: 0.16),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // Aurora Işık Küresi 3 (Alt Sol - Zümrüt Taktik Işığı)
-            Positioned(
-              bottom: 40 + (t * 30),
-              left: -40 + (t * 40),
-              child: Container(
-                width: 240,
-                height: 240,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: RadialGradient(
-                    colors: [
-                      const Color(0xFF059669).withValues(alpha: 0.15),
-                      Colors.transparent,
-                    ],
-                  ),
-                ),
-              ),
-            ),
-            // Ön Plan İçeriği
-            widget.child,
+            child ?? widget.child,
           ],
         );
       },

@@ -1,4 +1,3 @@
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -528,7 +527,7 @@ class _TeamScreenState extends State<TeamScreen> {
       backgroundColor: const Color(0xFF0F0F13),
       body: Stack(
         children: [
-          // Ambient Red Glow
+          // Ambient Red Glow (GPU Optimize)
           Positioned(
             top: -100,
             right: -100,
@@ -537,11 +536,12 @@ class _TeamScreenState extends State<TeamScreen> {
               height: 300,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: const Color(0xFFE50914).withValues(alpha: 0.15),
-              ),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 100, sigmaY: 100),
-                child: Container(color: Colors.transparent),
+                gradient: RadialGradient(
+                  colors: [
+                    const Color(0xFFE50914).withValues(alpha: 0.20),
+                    Colors.transparent,
+                  ],
+                ),
               ),
             ),
           ),

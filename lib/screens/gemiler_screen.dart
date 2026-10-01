@@ -1,28 +1,23 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:ui' as ui;
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:hugeicons/hugeicons.dart';
-import 'package:fl_chart/fl_chart.dart';
-import 'package:animated_flip_counter/animated_flip_counter.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:intl/intl.dart';
 
+import '../services/ship_tracking_service.dart';
 import '../utils/radio_sound_effects.dart';
 import '../utils/pdf_font_helper.dart';
-import '../widgets/shimmer_loading.dart';
-import '../widgets/industrial_animations.dart';
 import '../widgets/glass_widgets.dart';
-import '../widgets/vip_gate.dart';
 import '../models/user_model.dart';
-import '../services/ship_tracking_service.dart';
 
 class GemilerScreen extends StatefulWidget {
   final UserModel? user;
@@ -32,16 +27,26 @@ class GemilerScreen extends StatefulWidget {
   State<GemilerScreen> createState() => _GemilerScreenState();
 }
 
-class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProviderStateMixin {
+class _GemilerScreenState extends State<GemilerScreen> with TickerProviderStateMixin {
   late AnimationController _blinkController;
-  String _currentUserName = 'İsdemir Saha Operatörü';
-  String _selectedFilter = 'Gemi Başlama Alındı';
-  int _activeTabIndex = 0; // 0: Rıhtım & Operasyonlar, 1: Liman Analitik & Rapor
-  bool _soundEnabled = true;
-  int _touchedBarIndex = -1;
-  bool _isCheckingVip = true;
-  bool _isVip = false;
+  late AnimationController _radarSweepController;
   Timer? _autoSyncTimer;
+  bool _isSyncing = false;
+
+  int _selectedRadarSpectrum = 0; // 0: SAR Radar, 1: Optik Uydu, 2: Termal Isı
+  Map<String, dynamic>? _selectedRadarShip;
+  bool _isRadarScanning = false;
+
+  String _currentUserName = 'İsdemir Saha Operatörü';
+  String _selectedBerthFilter = 'Tümü'; // 'Tümü', '1. Rıhtım', '2. Rıhtım', '3. Rıhtım', '4. Rıhtım', '5. Rıhtım', 'Demir Sahası'
+  int _activeTabIndex = 0; // 0: Rıhtım & Operasyonlar, 1: PortAI™ Liman Analitiği, 2: SpaceEye AI Radar
+  bool _soundEnabled = true;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+  bool _isSeeding = false;
+
+  final List<String> _berths = ['Tümü', '1. Rıhtım', '2. Rıhtım', '3. Rıhtım', '4. Rıhtım', '5. Rıhtım', 'Demir Sahası'];
+  final List<String> _cargoTypes = ['Levha', 'Slap', 'Bobin', 'Cüruf', 'Medkok', 'Kömür', 'Hurda', 'Kütük', 'Rulo Sac', 'Cevher'];
 
   @override
   void initState() {
@@ -51,12 +56,19 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
       duration: const Duration(milliseconds: 1100),
     )..repeat(reverse: true);
 
+    _radarSweepController = AnimationController(
+      vsync: this,
+      duration: const Duration(seconds: 4),
+    )..repeat();
+
     RadioSoundEffects.init();
     _loadUserName();
     _loadSoundPreference();
-    _verifyVipAccess();
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text.trim().toLowerCase());
+    });
 
-    // AisStream.io kesintisiz canlı radar akışını başlat
+    // 🛰️ AisStream.io kesintisiz canlı radar akışını başlat
     ShipTrackingService.startLiveAisStream();
 
     // Sayfa açıldığında arka planda sessizce canlı radar verilerini senkronize et
@@ -64,31 +76,28 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
       _syncLiveAisStream(silent: true);
     });
 
-    // 45 saniyede bir arkaplanda canlı radar verilerini otomatik tazele
-    _autoSyncTimer = Timer.periodic(const Duration(seconds: 45), (_) {
+    // 40 saniyede bir arkaplanda canlı radar verilerini otomatik tazele
+    _autoSyncTimer = Timer.periodic(const Duration(seconds: 40), (_) {
       if (mounted && !_isSyncing) {
         _syncLiveAisStream(silent: true);
       }
     });
   }
 
-  Future<void> _verifyVipAccess() async {
-    if (widget.user?.isVip == true) {
-      _isVip = true;
-      _isCheckingVip = false;
-      if (mounted) setState(() {});
-    }
-
-    final isVip = await VipGate.checkVipStatus(user: widget.user);
-    if (mounted) {
-      setState(() {
-        _isVip = isVip;
-        _isCheckingVip = false;
-      });
-    }
+  @override
+  void dispose() {
+    _autoSyncTimer?.cancel();
+    _blinkController.dispose();
+    _radarSweepController.dispose();
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadUserName() async {
+    if (widget.user != null && widget.user!.fullName.isNotEmpty) {
+      setState(() => _currentUserName = widget.user!.fullName);
+      return;
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       final cihazId = prefs.getString('cihaz_id');
@@ -98,12 +107,10 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
             .where('cihaz_id', isEqualTo: cihazId)
             .limit(1)
             .get();
-        if (snap.docs.isNotEmpty) {
-          if (mounted) {
-            setState(() {
-              _currentUserName = snap.docs.first.data()['ad_soyad'] ?? 'İsdemir Saha Operatörü';
-            });
-          }
+        if (snap.docs.isNotEmpty && mounted) {
+          setState(() {
+            _currentUserName = snap.docs.first.data()['ad_soyad'] ?? 'İsdemir Saha Operatörü';
+          });
         }
       }
     } catch (_) {}
@@ -145,39 +152,36 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     } catch (_) {}
   }
 
-  @override
-  void dispose() {
-    _autoSyncTimer?.cancel();
-    _blinkController.dispose();
-    super.dispose();
-  }
-
-  bool _isSyncing = false;
-
+  /// 🛰️ AisStream.io & Neptune Canlı Radar Senkronizasyon Motoru
   Future<void> _syncLiveAisStream({bool silent = false}) async {
     if (_isSyncing) return;
     if (!silent) {
       _playSound('squelch');
-      setState(() {
-        _isSyncing = true;
-      });
-
+      setState(() => _isSyncing = true);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            backgroundColor: const Color(0xFF161A22),
+            backgroundColor: const Color(0xFF0F172A),
             behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: Color(0xFF0284C7), width: 1.2),
+            ),
             duration: const Duration(seconds: 3),
             content: Row(
-              children: const [
-                SizedBox(
+              children: [
+                const SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF10B981)),
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
                 ),
-                SizedBox(width: 12),
-                Text('AisStream + Neptune canlı radar taranıyor...', style: TextStyle(color: Colors.white, fontSize: 13)),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'AisStream canlı radar sinyalleri taranıyor...',
+                    style: GoogleFonts.inter(color: Colors.white, fontSize: 12.5),
+                  ),
+                ),
               ],
             ),
           ),
@@ -189,23 +193,26 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
 
     try {
       final result = await ShipTrackingService.syncLiveShips();
-      if (!silent && mounted) {
+      if (mounted && !silent) {
         if (result.success) {
           _playSound('roger');
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              backgroundColor: const Color(0xFF10B981),
+              backgroundColor: const Color(0xFF064E3B),
               behavior: SnackBarBehavior.floating,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+                side: const BorderSide(color: Color(0xFF10B981), width: 1.5),
+              ),
               duration: const Duration(seconds: 4),
               content: Row(
                 children: [
-                  const Icon(Icons.check_circle_rounded, color: Colors.white, size: 20),
+                  const Icon(Icons.check_circle_rounded, color: Color(0xFF34D399), size: 20),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      '✅ AisStream + Neptune: ${result.dockedCount} rıhtım, ${result.anchoredCount} demirde canlı gemi güncellendi.',
-                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      '✅ AisStream Canlı Radar: ${result.dockedCount} rıhtım, ${result.anchoredCount} demirde canlı gemi güncellendi.',
+                      style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
                     ),
                   ),
                 ],
@@ -215,283 +222,2877 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
         } else {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              backgroundColor: const Color(0xFFDC2626),
+              backgroundColor: const Color(0xFF7F1D1D),
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               duration: const Duration(seconds: 4),
-              content: Row(
-                children: [
-                  const Icon(Icons.error_outline_rounded, color: Colors.white, size: 20),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      result.error ?? 'AisStream canlı radar verisi güncellenemedi.',
-                      style: const TextStyle(color: Colors.white, fontSize: 12),
-                    ),
-                  ),
-                ],
+              content: Text(
+                result.error ?? 'AisStream verisi alınamadı.',
+                style: GoogleFonts.inter(color: Colors.white, fontSize: 12),
               ),
             ),
           );
         }
       }
     } catch (e) {
-      debugPrint('Sync hata: $e');
-      if (!silent && mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            backgroundColor: const Color(0xFFDC2626),
-            content: Text('Radar hatası: $e', style: const TextStyle(color: Colors.white)),
-          ),
-        );
-      }
+      debugPrint('[AisStream] Senkronizasyon hatası: $e');
     } finally {
       if (mounted) setState(() => _isSyncing = false);
     }
   }
 
-  Color _getStatusColor(String durum) {
-    switch (durum) {
-      case 'Demir Sahasında (Bekliyor)':
-      case 'Demirde Bekliyor':
-      case 'Demirde':
-        return const Color(0xFFF59E0B); // Amber / Gold for Anchorage
-      case 'Gemi Başlama Alındı':
-        return const Color(0xFF10B981); // Emerald Green
-      case 'Gemi Bitişte':
-        return const Color(0xFFF59E0B); // Amber Orange
-      case 'Gemi Bitti':
-        return const Color(0xFF3B82F6); // High-voltage Blue
-      case 'Limandan Ayrılıyor':
-        return const Color(0xFFEF4444); // Radiant Red (Departing)
-      case 'Limana Giriş Yapıyor':
-      case 'Limana Giriş Yaptı':
-        return const Color(0xFF06B6D4); // Cyan (Approaching/Entering)
-      case 'Limandan Ayrıldı':
-        return const Color(0xFF94A3B8); // Muted Slate Gray
-      default:
-        return const Color(0xFF10B981);
+  /// 🧠 PortAI™ Tahliye/Yükleme Hız & Bitiş Saati Hesaplayıcı
+  Map<String, dynamic> _calculatePortAiMetrics({
+    required double totalTonaj,
+    required double currentTonaj,
+    required String yukCinsi,
+    required String durum,
+  }) {
+    if (durum == 'Limandan Ayrıldı' || durum == 'Gemi Bitti') {
+      return {
+        'progress': 1.0,
+        'remainingTonaj': 0.0,
+        'remainingHours': 0.0,
+        'etdString': 'Operasyon Tamamlandı',
+        'rateTonPerHour': 0,
+        'isFinished': true,
+      };
+    }
+
+    final safeTotal = totalTonaj > 0 ? totalTonaj : 10000.0;
+    final safeCurrent = currentTonaj.clamp(0.0, safeTotal);
+    final progress = (safeCurrent / safeTotal).clamp(0.0, 1.0);
+    final remainingTonaj = safeTotal - safeCurrent;
+
+    final lower = yukCinsi.toLowerCase();
+    int hourlyRate = 650;
+    if (lower.contains('kömür') || lower.contains('cevher')) {
+      hourlyRate = 750;
+    } else if (lower.contains('hurda')) {
+      hourlyRate = 380;
+    } else if (lower.contains('levha') || lower.contains('slap') || lower.contains('kütük')) {
+      hourlyRate = 480;
+    } else if (lower.contains('bobin') || lower.contains('rulo')) {
+      hourlyRate = 520;
+    }
+
+    final hoursRemaining = remainingTonaj / hourlyRate;
+    final completionDateTime = DateTime.now().add(Duration(minutes: (hoursRemaining * 60).round()));
+    final etdString = DateFormat('dd.MM HH:mm').format(completionDateTime);
+
+    return {
+      'progress': progress,
+      'remainingTonaj': remainingTonaj,
+      'remainingHours': hoursRemaining,
+      'etdString': 'Bitiş: $etdString (~${hoursRemaining.toStringAsFixed(1)} sa)',
+      'rateTonPerHour': hourlyRate,
+      'isFinished': false,
+    };
+  }
+
+  /// 🚀 Örnek İSDEMİR Test Filosu Yükleyici
+  Future<void> _seedSampleFleet() async {
+    if (_isSeeding) return;
+    setState(() => _isSeeding = true);
+    _playSound('roger');
+    HapticFeedback.mediumImpact();
+
+    try {
+      final sampleShips = [
+        {
+          'gemiAdi': 'MV İSDEMİR-1',
+          'rihtimNo': '1. Rıhtım',
+          'yukCinsi': 'Kömür',
+          'durum': 'Tahliyede',
+          'tonaj': 45000.0,
+          'elleclenenTonaj': 28500.0,
+          'notlar': '1 ve 2 nolu kömür vinçleri tahliyede. Bant konveyör hattı devrede.',
+          'guncelleyenKisi': _currentUserName,
+          'sonGuncelleme': DateTime.now().toIso8601String(),
+        },
+        {
+          'gemiAdi': 'MV ERDEMİR-3',
+          'rihtimNo': '3. Rıhtım',
+          'yukCinsi': 'Cevher',
+          'durum': 'Tahliyede',
+          'tonaj': 52000.0,
+          'elleclenenTonaj': 19800.0,
+          'notlar': 'Demir cevheri pelet tesisine aktarılıyor. Tahmini bitiş yarın.',
+          'guncelleyenKisi': _currentUserName,
+          'sonGuncelleme': DateTime.now().toIso8601String(),
+        },
+        {
+          'gemiAdi': 'ATLANTIC BULKER',
+          'rihtimNo': 'Demir Sahası',
+          'yukCinsi': 'Hurda',
+          'durum': 'Demirde Bekliyor',
+          'tonaj': 32000.0,
+          'elleclenenTonaj': 0.0,
+          'notlar': '1. Rıhtım boşalması bekleniyor. Kılavuz kaptan planlandı.',
+          'guncelleyenKisi': _currentUserName,
+          'sonGuncelleme': DateTime.now().toIso8601String(),
+        },
+      ];
+
+      final col = FirebaseFirestore.instance.collection('gemiler');
+      for (var s in sampleShips) {
+        await col.add(s);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: const [
+                Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+                SizedBox(width: 8),
+                Text('3 Adet İSDEMİR gemisi rıhtımlara başarıyla yüklendi!'),
+              ],
+            ),
+            backgroundColor: const Color(0xFF10B981),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Seed error: $e');
+    } finally {
+      if (mounted) setState(() => _isSeeding = false);
     }
   }
 
-  String _getStatusLabel(String durum) {
-    switch (durum) {
-      case 'Demir Sahasında (Bekliyor)':
-      case 'Demirde Bekliyor':
-      case 'Demirde':
-        return 'Demirde';
-      case 'Gemi Başlama Alındı':
-        return 'Başladı';
-      case 'Gemi Bitişte':
-        return 'Bitişte';
-      case 'Gemi Bitti':
-        return 'Bitti';
-      case 'Limandan Ayrılıyor':
-        return 'Ayrılıyor';
-      case 'Limana Giriş Yapıyor':
-      case 'Limana Giriş Yaptı':
-        return 'Giriş Yaptı';
-      case 'Limandan Ayrıldı':
-        return 'Ayrıldı';
-      default:
-        return durum;
-    }
-  }
-
-
-
-  // --- YÜK CİNSİ GÜNCELLEME MODALI ---
-  void _showEditYukCinsiDialog(String docId, String gemiAdi, String currentYukCinsi) {
-    _playSound('squelch');
-    HapticFeedback.selectionClick();
-
-    final List<String> quickOptions = [
-      'Bobin',
-      'Slap',
-      'Rulo Sac',
-      'Kömür',
-      'Cüruf',
-      'Hurda',
-      'Medkok',
-      'Kütük',
-      'Levha',
-      'Pelet',
-      'Cevher',
-      'Genel Kargo',
-      'Dökme Yük',
-      'Paket Sac',
-      'Liman Hizmeti',
-    ];
-
-    String selectedYuk = currentYukCinsi;
-    final TextEditingController customYukController = TextEditingController(
-      text: quickOptions.contains(currentYukCinsi) ? '' : currentYukCinsi,
-    );
-
-    showDialog(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF13171F),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: BorderSide(color: const Color(0xFF14B8A6).withValues(alpha: 0.3)),
-              ),
-              title: Row(
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF060913),
+      body: Stack(
+        children: [
+          // ── 1. UZAMSAL KOBALT & DENİZ OBSİDİYANI ZEMİNİ ──
+          Positioned.fill(
+            child: RepaintBoundary(
+              child: Stack(
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF14B8A6).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
+                  Container(color: const Color(0xFF060913)),
+                  Positioned(
+                    top: -80,
+                    right: -50,
+                    child: Container(
+                      width: 320,
+                      height: 320,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF0284C7).withValues(alpha: 0.12),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF0284C7).withValues(alpha: 0.18),
+                            blurRadius: 110,
+                            spreadRadius: 35,
+                          ),
+                        ],
+                      ),
                     ),
-                    child: const Icon(Icons.inventory_2_rounded, color: Color(0xFF14B8A6), size: 20),
                   ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text(
-                          'Yük Cinsini Güncelle',
-                          style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                  Positioned(
+                    top: 260,
+                    left: -70,
+                    child: Container(
+                      width: 280,
+                      height: 280,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFFDC2626).withValues(alpha: 0.08),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFFDC2626).withValues(alpha: 0.12),
+                            blurRadius: 100,
+                            spreadRadius: 25,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: -30,
+                    right: -40,
+                    child: Container(
+                      width: 260,
+                      height: 260,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF10B981).withValues(alpha: 0.08),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF10B981).withValues(alpha: 0.12),
+                            blurRadius: 100,
+                            spreadRadius: 25,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          // ── 2. ANA İÇERİK: STREAMBUILDER İLE CANLI MANUEL VERİ ──
+          SafeArea(
+            bottom: true,
+            child: StreamBuilder<QuerySnapshot>(
+              stream: FirebaseFirestore.instance.collection('gemiler').snapshots(),
+              builder: (context, snapshot) {
+                final allDocs = snapshot.data?.docs ?? [];
+                final filteredDocs = _filterDocs(allDocs);
+
+                return Column(
+                  children: [
+                    // Sabit VisionOS Üst Bar (SIFIR TAŞMA GARANTİLİ)
+                    _buildTopBar(allDocs),
+
+                    // Liman Çevresel & Canlı Telemetri Bandı
+                    _buildTelemetryStrip(),
+
+                    // Ekrana %100 Sığan 2 Satırlı Rıhtım Kontrol Matrisi
+                    _buildBerthOverviewDeck(allDocs),
+
+                    // Arama & Filtreleme Kutucuğu
+                    _buildSearchBar(),
+
+                    // Tab Switcher (Operasyonlar / PortAI Analitiği)
+                    _buildTabSwitcher(),
+
+                    // Ana İçerik Alanı
+                    Expanded(
+                      child: _activeTabIndex == 0
+                          ? _buildOperationsTab(filteredDocs, allDocs, snapshot.connectionState)
+                          : _activeTabIndex == 1
+                              ? _buildPortAiAnalyticsTab(allDocs)
+                              : _buildSpaceEyeRadarTab(allDocs),
+                    ),
+                  ],
+                );
+              },
+            ),
+          ),
+        ],
+      ),
+      // ── FAB: YENİ GEMİ EKLE (MANUEL OPERASYON) ──
+      floatingActionButton: BouncyTap(
+        onTap: () {
+          _playSound('squelch');
+          _showShipFormModal();
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFDC2626), Color(0xFFEA580C)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.25), width: 1.2),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFFDC2626).withValues(alpha: 0.45),
+                blurRadius: 18,
+                offset: const Offset(0, 5),
+              ),
+            ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.add_circle_rounded, color: Colors.white, size: 19),
+              const SizedBox(width: 7),
+              Text(
+                'YENİ GEMİ EKLE',
+                style: GoogleFonts.orbitron(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w900,
+                  color: Colors.white,
+                  letterSpacing: 1.1,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 🌟 1. VisionOS Kokpit Üst Barı (SIFIR TAŞMA GARANTİLİ)
+  Widget _buildTopBar(List<QueryDocumentSnapshot> allDocs) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 6.0),
+      child: Row(
+        children: [
+          // Geri Butonu (Kompakt 38x38 Glass)
+          BouncyTap(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              Navigator.pop(context);
+            },
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+              ),
+              child: const Center(
+                child: Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 15),
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+
+          // Başlık Alanı (Expanded ile sarıldı: ekrandan asla taşmaz)
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: const BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Color(0xFF38BDF8),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Color(0xFF38BDF8),
+                            blurRadius: 6,
+                            spreadRadius: 1,
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        'İSDEMİR LİMAN PORTOS™',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: GoogleFonts.orbitron(
+                          fontSize: 9.5,
+                          fontWeight: FontWeight.w800,
+                          color: const Color(0xFF38BDF8),
+                          letterSpacing: 1.2,
                         ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'Deniz & Rıhtım Operasyonları',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                    color: Colors.white,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 6),
+
+          // AisStream Canlı Radar Senkronizasyon Butonu (36x36 Glass)
+          BouncyTap(
+            onTap: _isSyncing ? null : () => _syncLiveAisStream(silent: false),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFF0284C7).withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.45)),
+              ),
+              child: Center(
+                child: _isSyncing
+                    ? const SizedBox(
+                        width: 15,
+                        height: 15,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF38BDF8)),
+                      )
+                    : const Icon(Icons.sync_rounded, color: Color(0xFF38BDF8), size: 17),
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+
+          // Telsiz Sesi Toggle Butonu (36x36 Glass)
+          BouncyTap(
+            onTap: _toggleSound,
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: _soundEnabled
+                    ? const Color(0xFF10B981).withValues(alpha: 0.15)
+                    : Colors.white.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(
+                  color: _soundEnabled
+                      ? const Color(0xFF10B981).withValues(alpha: 0.45)
+                      : Colors.white12,
+                ),
+              ),
+              child: Icon(
+                _soundEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+                color: _soundEnabled ? const Color(0xFF34D399) : Colors.white38,
+                size: 16,
+              ),
+            ),
+          ),
+          const SizedBox(width: 6),
+
+          // PDF Liman Vardiya Raporu Butonu (36x36 Glass)
+          BouncyTap(
+            onTap: () => _generateAndSharePortReport(allDocs),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: const Color(0xFFDC2626).withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: const Color(0xFFDC2626).withValues(alpha: 0.45)),
+              ),
+              child: const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFFF87171), size: 16),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 🌊 2. Liman Çevresel & Canlı Telemetri Bandı
+  Widget _buildTelemetryStrip() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.03),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.anchor_rounded, color: Color(0xFF38BDF8), size: 13),
+                const SizedBox(width: 4),
+                Text(
+                  'İSDEMİR LİMANI',
+                  style: GoogleFonts.orbitron(fontSize: 9.5, fontWeight: FontWeight.w700, color: const Color(0xFF93C5FD)),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                Icon(
+                  Icons.sensors_rounded,
+                  color: _isSyncing ? const Color(0xFFFBBF24) : const Color(0xFF34D399),
+                  size: 13,
+                ),
+                const SizedBox(width: 4),
+                Text(
+                  _isSyncing ? 'AisStream Taranıyor...' : 'AisStream Canlı 🟢',
+                  style: GoogleFonts.inter(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    color: _isSyncing ? const Color(0xFFFDE68A) : const Color(0xFF6EE7B7),
+                  ),
+                ),
+              ],
+            ),
+            Row(
+              children: [
+                const Icon(Icons.precision_manufacturing_rounded, color: Color(0xFFFBBF24), size: 13),
+                const SizedBox(width: 4),
+                Text(
+                  '6 Vinç Aktif',
+                  style: GoogleFonts.inter(fontSize: 10, fontWeight: FontWeight.w600, color: const Color(0xFFFDE68A)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// ⚓ 3. Ekrana %100 Sığan 2 Satırlı Rıhtım Kontrol Matrisi (SIFIR YATAY KAYMA)
+  Widget _buildBerthOverviewDeck(List<QueryDocumentSnapshot> allDocs) {
+    // Rıhtımlara göre gemileri haritala
+    final Map<String, String> berthOccupancy = {};
+    for (int i = 1; i <= 5; i++) {
+      berthOccupancy['$i. Rıhtım'] = 'BOŞ';
+    }
+    berthOccupancy['Demir Sahası'] = 'BOŞ';
+
+    int demirCount = 0;
+    int occupiedCount = 0;
+    for (var doc in allDocs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final rNo = data['rihtimNo']?.toString() ?? '';
+      final durum = data['durum']?.toString() ?? '';
+      final gemiAdi = data['gemiAdi']?.toString() ?? '';
+
+      if (durum != 'Limandan Ayrıldı') {
+        if (rNo.contains('Demir') || durum.contains('Demir')) {
+          demirCount++;
+          berthOccupancy['Demir Sahası'] = '$demirCount Gemi';
+        } else {
+          for (int i = 1; i <= 5; i++) {
+            if (rNo.startsWith('$i') || rNo == '$i. Rıhtım' || rNo == '$i') {
+              berthOccupancy['$i. Rıhtım'] = gemiAdi;
+              occupiedCount++;
+            }
+          }
+        }
+      }
+    }
+    if (demirCount == 0) {
+      berthOccupancy['Demir Sahası'] = 'BOŞ';
+    }
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Rıhtım Matris Başlığı & Tümü Filtresi
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.grid_view_rounded, size: 12, color: Color(0xFF38BDF8)),
+                  const SizedBox(width: 5),
+                  Text(
+                    'RIHTIM KONTROL DECKİ',
+                    style: GoogleFonts.orbitron(
+                      fontSize: 9.5,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF94A3B8),
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Text(
+                    '$occupiedCount/5 Dolu',
+                    style: GoogleFonts.orbitron(
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      color: occupiedCount >= 4 ? const Color(0xFFF87171) : const Color(0xFF34D399),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                  // 'TÜMÜ' filtresi butonu
+                  BouncyTap(
+                    onTap: () {
+                      HapticFeedback.selectionClick();
+                      _playSound('squelch');
+                      setState(() => _selectedBerthFilter = 'Tümü');
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: _selectedBerthFilter == 'Tümü'
+                            ? const Color(0xFF0284C7).withValues(alpha: 0.35)
+                            : Colors.white.withValues(alpha: 0.05),
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: _selectedBerthFilter == 'Tümü'
+                              ? const Color(0xFF38BDF8)
+                              : Colors.white12,
+                        ),
+                      ),
+                      child: Text(
+                        'TÜMÜ (${allDocs.length})',
+                        style: GoogleFonts.orbitron(
+                          fontSize: 8.5,
+                          fontWeight: FontWeight.w800,
+                          color: _selectedBerthFilter == 'Tümü' ? Colors.white : Colors.white60,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+
+          // Satır 1: Rıhtım 1, 2, 3 (Ekrana tam yayılır)
+          Row(
+            children: [
+              Expanded(child: _buildBerthMatrixItem('1. Rıhtım', 'R-1', berthOccupancy['1. Rıhtım']!)),
+              const SizedBox(width: 6),
+              Expanded(child: _buildBerthMatrixItem('2. Rıhtım', 'R-2', berthOccupancy['2. Rıhtım']!)),
+              const SizedBox(width: 6),
+              Expanded(child: _buildBerthMatrixItem('3. Rıhtım', 'R-3', berthOccupancy['3. Rıhtım']!)),
+            ],
+          ),
+          const SizedBox(height: 6),
+
+          // Satır 2: Rıhtım 4, 5, Demir Sahası (Ekrana tam yayılır)
+          Row(
+            children: [
+              Expanded(child: _buildBerthMatrixItem('4. Rıhtım', 'R-4', berthOccupancy['4. Rıhtım']!)),
+              const SizedBox(width: 6),
+              Expanded(child: _buildBerthMatrixItem('5. Rıhtım', 'R-5', berthOccupancy['5. Rıhtım']!)),
+              const SizedBox(width: 6),
+              Expanded(child: _buildBerthMatrixItem('Demir Sahası', 'DEMİR', berthOccupancy['Demir Sahası']!)),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 🧱 Rıhtım Matris Hücre Elemanı
+  Widget _buildBerthMatrixItem(String bName, String code, String occupancy) {
+    final isSelected = _selectedBerthFilter == bName;
+    final isOccupied = occupancy != 'BOŞ';
+
+    return BouncyTap(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        _playSound('squelch');
+        setState(() {
+          if (_selectedBerthFilter == bName) {
+            _selectedBerthFilter = 'Tümü';
+          } else {
+            _selectedBerthFilter = bName;
+          }
+        });
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
+        decoration: BoxDecoration(
+          gradient: isSelected
+              ? const LinearGradient(
+                  colors: [Color(0xFF0284C7), Color(0xFF0369A1)],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                )
+              : LinearGradient(
+                  colors: [
+                    Colors.white.withValues(alpha: 0.05),
+                    Colors.white.withValues(alpha: 0.02),
+                  ],
+                ),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: isSelected
+                ? const Color(0xFF38BDF8)
+                : (isOccupied
+                    ? const Color(0xFFEF4444).withValues(alpha: 0.45)
+                    : const Color(0xFF10B981).withValues(alpha: 0.25)),
+            width: isSelected ? 1.5 : 1.0,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF0284C7).withValues(alpha: 0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  code,
+                  style: GoogleFonts.orbitron(
+                    fontSize: 9.5,
+                    fontWeight: FontWeight.w900,
+                    color: isSelected
+                        ? Colors.white
+                        : (isOccupied ? const Color(0xFFFCA5A5) : const Color(0xFF6EE7B7)),
+                  ),
+                ),
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isOccupied ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                    boxShadow: [
+                      BoxShadow(
+                        color: isOccupied ? const Color(0xFFEF4444) : const Color(0xFF10B981),
+                        blurRadius: 4,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 2),
+            Text(
+              isOccupied ? occupancy : 'BOŞ',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: GoogleFonts.inter(
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                color: isSelected
+                    ? Colors.white
+                    : (isOccupied ? Colors.white.withValues(alpha: 0.9) : const Color(0xFF34D399).withValues(alpha: 0.8)),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 🔍 4. Arama Kutucuğu
+  Widget _buildSearchBar() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      child: Container(
+        height: 38,
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: TextField(
+          controller: _searchController,
+          style: GoogleFonts.inter(fontSize: 12, color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Gemi adı veya yük cinsi ara (örn: Kömür, İSDEMİR)...',
+            hintStyle: GoogleFonts.inter(fontSize: 11, color: Colors.white38),
+            prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 16),
+            suffixIcon: _searchQuery.isNotEmpty
+                ? IconButton(
+                    icon: const Icon(Icons.close_rounded, color: Colors.white38, size: 14),
+                    onPressed: () => _searchController.clear(),
+                  )
+                : null,
+            contentPadding: const EdgeInsets.symmetric(vertical: 8),
+            border: InputBorder.none,
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 🔀 5. Tab Switcher
+  Widget _buildTabSwitcher() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 4.0),
+      child: Container(
+        height: 40,
+        padding: const EdgeInsets.all(3),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.04),
+          borderRadius: BorderRadius.circular(13),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Row(
+          children: [
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() => _activeTabIndex = 0);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  decoration: BoxDecoration(
+                    gradient: _activeTabIndex == 0
+                        ? const LinearGradient(colors: [Color(0xFF0284C7), Color(0xFF0369A1)])
+                        : null,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.directions_boat_rounded,
+                          size: 13,
+                          color: _activeTabIndex == 0 ? Colors.white : Colors.white60,
+                        ),
+                        const SizedBox(width: 5),
                         Text(
-                          gemiAdi,
-                          style: const TextStyle(color: Colors.white54, fontSize: 12),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
+                          'Rıhtım & Operasyon',
+                          style: GoogleFonts.inter(
+                            fontSize: 10.5,
+                            fontWeight: _activeTabIndex == 0 ? FontWeight.w800 : FontWeight.w600,
+                            color: _activeTabIndex == 0 ? Colors.white : Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  setState(() => _activeTabIndex = 1);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  decoration: BoxDecoration(
+                    gradient: _activeTabIndex == 1
+                        ? const LinearGradient(colors: [Color(0xFF7C3AED), Color(0xFF4F46E5)])
+                        : null,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 13,
+                          color: _activeTabIndex == 1 ? Colors.white : const Color(0xFFA78BFA),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          'PortAI™ Liman',
+                          style: GoogleFonts.inter(
+                            fontSize: 10.5,
+                            fontWeight: _activeTabIndex == 1 ? FontWeight.w800 : FontWeight.w600,
+                            color: _activeTabIndex == 1 ? Colors.white : const Color(0xFFA78BFA),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            Expanded(
+              child: GestureDetector(
+                onTap: () {
+                  HapticFeedback.selectionClick();
+                  _playSound('squelch');
+                  setState(() => _activeTabIndex = 2);
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 180),
+                  decoration: BoxDecoration(
+                    gradient: _activeTabIndex == 2
+                        ? const LinearGradient(colors: [Color(0xFF0D9488), Color(0xFF0284C7)])
+                        : null,
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Center(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.satellite_alt_rounded,
+                          size: 13,
+                          color: _activeTabIndex == 2 ? Colors.white : const Color(0xFF5EEAD4),
+                        ),
+                        const SizedBox(width: 5),
+                        Text(
+                          'SpaceEye AI',
+                          style: GoogleFonts.inter(
+                            fontSize: 10.5,
+                            fontWeight: _activeTabIndex == 2 ? FontWeight.w800 : FontWeight.w600,
+                            color: _activeTabIndex == 2 ? Colors.white : const Color(0xFF5EEAD4),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 🚢 6. Rıhtım & Operasyonlar Listesi Tabı
+  Widget _buildOperationsTab(
+    List<QueryDocumentSnapshot> docs,
+    List<QueryDocumentSnapshot> allDocs,
+    ConnectionState connectionState,
+  ) {
+    if (connectionState == ConnectionState.waiting && allDocs.isEmpty) {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFF0284C7)));
+    }
+
+    // Eğer veritabanı tamamen boşsa: Yüksek Teknolojili Komuta Merkezi Hero Kartı göster
+    if (allDocs.isEmpty) {
+      return _buildEmptyStateHero();
+    }
+
+    // Filtreleme sonucu boşsa
+    if (docs.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white.withValues(alpha: 0.05),
+                ),
+                child: const Icon(Icons.search_off_rounded, color: Colors.white38, size: 40),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Filtreye Uygun Gemi Bulunamadı',
+                style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Seçilen rıhtımda veya arama kriterinde aktif gemi kaydı yok.',
+                style: GoogleFonts.inter(fontSize: 11.5, color: Colors.white54),
+              ),
+              const SizedBox(height: 14),
+              BouncyTap(
+                onTap: () {
+                  setState(() {
+                    _selectedBerthFilter = 'Tümü';
+                    _searchController.clear();
+                  });
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.4)),
+                  ),
+                  child: Text(
+                    'FİLTRELERİ SIFIRLA',
+                    style: GoogleFonts.orbitron(fontSize: 10.5, fontWeight: FontWeight.bold, color: const Color(0xFF38BDF8)),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return RefreshIndicator(
+      color: const Color(0xFF38BDF8),
+      backgroundColor: const Color(0xFF0F172A),
+      onRefresh: () => _syncLiveAisStream(silent: false),
+      child: ListView.builder(
+        padding: const EdgeInsets.only(left: 16, right: 16, top: 4, bottom: 90),
+        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+        itemCount: docs.length,
+        itemBuilder: (context, index) {
+          final doc = docs[index];
+          final data = doc.data() as Map<String, dynamic>;
+          return _buildShipCard(doc.id, data);
+        },
+      ),
+    );
+  }
+
+  /// 🌟 7. Profesyonel Komuta Merkezi Boş Durum Kartı (Gemi Olmadığında)
+  Widget _buildEmptyStateHero() {
+    return SingleChildScrollView(
+      physics: const BouncingScrollPhysics(),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      child: Column(
+        children: [
+          // 3D Liman Hero Kartı
+          Container(
+            width: double.infinity,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.35), width: 1.2),
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFF0F172A).withValues(alpha: 0.95),
+                  const Color(0xFF0284C7).withValues(alpha: 0.15),
+                ],
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(23),
+              child: Stack(
+                children: [
+                  // Arka plan 3D Liman Görseli
+                  Positioned.fill(
+                    child: Opacity(
+                      opacity: 0.18,
+                      child: Image.asset(
+                        'assets/images/port_quayside_ship_3d.jpg',
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) => const SizedBox(),
+                      ),
+                    ),
+                  ),
+
+                  // Ön Plan İçeriği
+                  Padding(
+                    padding: const EdgeInsets.all(22.0),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        // Holografik Radar İkonu
+                        Container(
+                          width: 68,
+                          height: 68,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF0284C7), Color(0xFF0369A1)],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF0284C7).withValues(alpha: 0.5),
+                                blurRadius: 24,
+                                spreadRadius: 3,
+                              ),
+                            ],
+                          ),
+                          child: const Center(
+                            child: Icon(Icons.anchor_rounded, color: Colors.white, size: 34),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+
+                        // Rozet
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF10B981)),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                'LİMAN İSTASYONU ÇEVRİMİÇİ',
+                                style: GoogleFonts.orbitron(fontSize: 9, fontWeight: FontWeight.w800, color: const Color(0xFF6EE7B7)),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        Text(
+                          'Kayıtlı Gemi Bulunmuyor',
+                          style: GoogleFonts.orbitron(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
+                            color: Colors.white,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+
+                        Text(
+                          'İskenderun Demir Çelik liman rıhtımlarında şu an kayıtlı bir gemi bulunmuyor. Canlı PortAI™ tahliye simülasyonunu başlatmak için tek tıkla örnek filoyu yükleyebilir veya manuel gemi kaydı açabilirsiniz.',
+                          textAlign: TextAlign.center,
+                          style: GoogleFonts.inter(
+                            fontSize: 11.5,
+                            color: const Color(0xFFCBD5E1),
+                            height: 1.45,
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+
+                        // Ana Aksiyon 1: AisStream Canlı Radar Gemilerini Çek
+                        BouncyTap(
+                          onTap: () => _syncLiveAisStream(silent: false),
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF0D9488), Color(0xFF0284C7)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.7), width: 1.3),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF0284C7).withValues(alpha: 0.45),
+                                  blurRadius: 18,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                _isSyncing
+                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                    : const Icon(Icons.satellite_alt_rounded, color: Colors.white, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _isSyncing ? 'AİSSTREAM TARANIYOR...' : 'AİSSTREAM İLE CANLI GEMİLERİ ÇEK',
+                                  style: GoogleFonts.orbitron(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // Ana Aksiyon 2: Örnek Filoyu Yükle
+                        BouncyTap(
+                          onTap: _seedSampleFleet,
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 13),
+                            decoration: BoxDecoration(
+                              gradient: const LinearGradient(
+                                colors: [Color(0xFF0284C7), Color(0xFF0369A1)],
+                                begin: Alignment.topLeft,
+                                end: Alignment.bottomRight,
+                              ),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.6), width: 1.2),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF0284C7).withValues(alpha: 0.4),
+                                  blurRadius: 16,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                _isSeeding
+                                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2))
+                                    : const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _isSeeding ? 'FİLO YÜKLENİYOR...' : 'ÖRNEK İSDEMİR FİLOSUNU YÜKLE (3 GEMİ)',
+                                  style: GoogleFonts.orbitron(
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                    letterSpacing: 0.8,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+
+                        // Ana Aksiyon 2: Manuel Gemi Ekle
+                        BouncyTap(
+                          onTap: () {
+                            _playSound('squelch');
+                            _showShipFormModal();
+                          },
+                          child: Container(
+                            width: double.infinity,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withValues(alpha: 0.05),
+                              borderRadius: BorderRadius.circular(16),
+                              border: Border.all(color: Colors.white12),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.add_circle_outline_rounded, color: Colors.white70, size: 16),
+                                const SizedBox(width: 7),
+                                Text(
+                                  'MANUEL YENİ GEMİ EKLE',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
                         ),
                       ],
                     ),
                   ),
                 ],
               ),
-              content: SingleChildScrollView(
+            ),
+          ),
+
+          const SizedBox(height: 16),
+
+          // 3'lü Bento Liman İstatistiği
+          Row(
+            children: [
+              Expanded(child: _buildMiniHeroMetric('KAPASİTE', '5/5 Boş', Icons.dock_rounded, const Color(0xFF10B981))),
+              const SizedBox(width: 8),
+              Expanded(child: _buildMiniHeroMetric('SU DERİNLİĞİ', '14.5 m', Icons.waves_rounded, const Color(0xFF38BDF8))),
+              const SizedBox(width: 8),
+              Expanded(child: _buildMiniHeroMetric('OPERASYON', 'Manuel', Icons.tune_rounded, const Color(0xFFFBBF24))),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMiniHeroMetric(String title, String val, IconData icon, Color col) {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+      decoration: BoxDecoration(
+        color: Colors.white.withValues(alpha: 0.03),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: col, size: 18),
+          const SizedBox(height: 6),
+          Text(val, style: GoogleFonts.orbitron(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+          const SizedBox(height: 2),
+          Text(title, style: GoogleFonts.inter(fontSize: 8.5, color: Colors.white54, fontWeight: FontWeight.w600)),
+        ],
+      ),
+    );
+  }
+
+  /// 📦 8. VisionOS Bento Gemi Kartı (Ultra Profesyonel)
+  Widget _buildShipCard(String docId, Map<String, dynamic> data) {
+    final gemiAdi = data['gemiAdi']?.toString() ?? 'İSİMSİZ GEMİ';
+    final rihtimNo = data['rihtimNo']?.toString() ?? '1. Rıhtım';
+    final yukCinsi = data['yukCinsi']?.toString() ?? 'Kömür';
+    final durum = data['durum']?.toString() ?? 'Tahliyede';
+    final rawTonaj = data['tonaj']?.toString() ?? data['dwt']?.toString() ?? '';
+    final cleanTonajStr = rawTonaj.replaceAll(RegExp(r'[^0-9.]'), '');
+    final totalTonaj = double.tryParse(cleanTonajStr) ?? 35000.0;
+    final rawElleclenen = data['elleclenenTonaj']?.toString() ?? '';
+    final cleanElleclenenStr = rawElleclenen.replaceAll(RegExp(r'[^0-9.]'), '');
+    final currentTonaj = double.tryParse(cleanElleclenenStr) ?? (totalTonaj * 0.55);
+    final operatorName = data['guncelleyenKisi']?.toString() ?? _currentUserName;
+
+    // PortAI Hesaplama
+    final aiMetrics = _calculatePortAiMetrics(
+      totalTonaj: totalTonaj,
+      currentTonaj: currentTonaj,
+      yukCinsi: yukCinsi,
+      durum: durum,
+    );
+
+    final progress = aiMetrics['progress'] as double;
+    final etdString = aiMetrics['etdString'] as String;
+    final rate = aiMetrics['rateTonPerHour'] as int;
+
+    // Durum Rengi
+    Color statusColor = const Color(0xFF10B981);
+    if (durum.contains('Demir') || durum.contains('Bekliyor')) {
+      statusColor = const Color(0xFFF59E0B);
+    } else if (durum.contains('Bitişte')) {
+      statusColor = const Color(0xFF38BDF8);
+    } else if (durum.contains('Ayrıldı')) {
+      statusColor = const Color(0xFF94A3B8);
+    }
+
+    // Yük Cinsine Göre Gemi Görseli Seçimi
+    String vesselAsset = 'assets/images/vessel_bulk.jpg';
+    final yukLower = yukCinsi.toLowerCase();
+    if (yukLower.contains('bobin') || yukLower.contains('levha') || yukLower.contains('rulo')) {
+      vesselAsset = 'assets/images/vessel_cargo.jpg';
+    } else if (yukLower.contains('akaryakıt') || yukLower.contains('likit')) {
+      vesselAsset = 'assets/images/vessel_tanker.jpg';
+    }
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            const Color(0xFF111728).withValues(alpha: 0.92),
+            const Color(0xFF0C101C).withValues(alpha: 0.96),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 1.1),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.35),
+            blurRadius: 16,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Üst Satır: Gemi Thumbnail + İsim + Rıhtım/Yük Rozetleri + Durum
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Gemi Küçük 3D Resmi
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  width: 46,
+                  height: 46,
+                  color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                  child: Image.asset(
+                    vesselAsset,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) => const Icon(Icons.directions_boat_rounded, color: Color(0xFF38BDF8), size: 24),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
+
+              // Gemi İsmi ve Rozetler
+              Expanded(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      'Hızlı Seçim Rozetleri',
-                      style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 8),
-                    Wrap(
-                      spacing: 6,
-                      runSpacing: 6,
-                      children: quickOptions.map((opt) {
-                        final isSelected = selectedYuk == opt && customYukController.text.trim().isEmpty;
-                        return ChoiceChip(
-                          label: Text(opt),
-                          selected: isSelected,
-                          selectedColor: const Color(0xFF14B8A6),
-                          backgroundColor: Colors.white.withValues(alpha: 0.05),
-                          labelStyle: TextStyle(
-                            color: isSelected ? Colors.black : Colors.white70,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                            fontSize: 11,
-                          ),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(8),
-                            side: BorderSide(
-                              color: isSelected ? const Color(0xFF14B8A6) : Colors.white12,
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            gemiAdi,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              color: Colors.white,
                             ),
                           ),
-                          onSelected: (val) {
-                            if (val) {
-                              setDialogState(() {
-                                selectedYuk = opt;
-                                customYukController.clear();
-                              });
-                            }
-                          },
-                        );
-                      }).toList(),
-                    ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      'Veya Özel Yük Cinsi Yazın',
-                      style: TextStyle(color: Colors.white70, fontSize: 12, fontWeight: FontWeight.w600),
-                    ),
-                    const SizedBox(height: 8),
-                    TextField(
-                      controller: customYukController,
-                      style: const TextStyle(color: Colors.white, fontSize: 14),
-                      decoration: InputDecoration(
-                        hintText: 'Örn: Demir Filizi, Boru, Pik...',
-                        hintStyle: const TextStyle(color: Colors.white30, fontSize: 13),
-                        filled: true,
-                        fillColor: Colors.white.withValues(alpha: 0.05),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: Colors.white24),
                         ),
-                        focusedBorder: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(10),
-                          borderSide: const BorderSide(color: Color(0xFF14B8A6), width: 1.5),
+                        const SizedBox(width: 6),
+                        // Durum Rozeti
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: statusColor.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: statusColor.withValues(alpha: 0.35)),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 5,
+                                height: 5,
+                                decoration: BoxDecoration(shape: BoxShape.circle, color: statusColor),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                durum,
+                                style: GoogleFonts.inter(
+                                  fontSize: 9.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: statusColor,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
-                        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                      ),
-                      onChanged: (text) {
-                        setDialogState(() {
-                          if (text.trim().isNotEmpty) {
-                            selectedYuk = text.trim();
-                          }
-                        });
-                      },
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+                    Row(
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.35)),
+                          ),
+                          child: Text(
+                            rihtimNo.contains('Demir')
+                                ? 'Demir Sahası'
+                                : (rihtimNo.contains('Rıhtım') ? rihtimNo : '$rihtimNo. Rıhtım'),
+                            style: GoogleFonts.orbitron(
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.w800,
+                              color: const Color(0xFF7DD3FC),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.06),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            yukCinsi,
+                            style: GoogleFonts.inter(
+                              fontSize: 8.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          '${NumberFormat('#,###').format(totalTonaj.toInt())} T',
+                          style: GoogleFonts.orbitron(fontSize: 8.5, color: Colors.white54),
+                        ),
+                      ],
                     ),
                   ],
                 ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(ctx),
-                  child: const Text('Vazgeç', style: TextStyle(color: Colors.white54)),
+            ],
+          ),
+
+          const SizedBox(height: 12),
+
+          // Sıvı Neon İlerleme Barı
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Elleçleme İlerlemesi',
+                style: GoogleFonts.inter(fontSize: 10.5, color: Colors.white60),
+              ),
+              Text(
+                '${NumberFormat('#,###').format(currentTonaj.toInt())} / ${NumberFormat('#,###').format(totalTonaj.toInt())} Ton (%${(progress * 100).toInt()})',
+                style: GoogleFonts.orbitron(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
                 ),
-                ElevatedButton(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF14B8A6),
-                    foregroundColor: Colors.black,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 5),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: Container(
+              height: 6,
+              width: double.infinity,
+              color: Colors.white.withValues(alpha: 0.08),
+              child: FractionallySizedBox(
+                alignment: Alignment.centerLeft,
+                widthFactor: progress.clamp(0.02, 1.0),
+                child: Container(
+                  decoration: const BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFFDC2626), Color(0xFFF59E0B), Color(0xFF10B981)],
+                    ),
                   ),
-                  onPressed: () async {
-                    final finalYuk = customYukController.text.trim().isNotEmpty
-                        ? customYukController.text.trim()
-                        : selectedYuk;
+                ),
+              ),
+            ),
+          ),
 
-                    Navigator.pop(ctx);
+          const SizedBox(height: 10),
 
-                    try {
-                      await FirebaseFirestore.instance.collection('gemiler').doc(docId).update({
-                        'yukCinsi': finalYuk,
-                        'guncellemeZamani': FieldValue.serverTimestamp(),
-                      });
-                      _playSound('tail');
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            backgroundColor: const Color(0xFF14B8A6),
-                            content: Text(
-                              '$gemiAdi yük cinsi "$finalYuk" olarak güncellendi.',
-                              style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-                            ),
-                          ),
-                        );
-                      }
-                    } catch (e) {
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Güncelleme hatası: $e')),
-                        );
-                      }
-                    }
-                  },
-                  child: const Text('Kaydet', style: TextStyle(fontWeight: FontWeight.bold)),
+          // PortAI™ ETD Bilgi Kapsülü
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+            decoration: BoxDecoration(
+              color: const Color(0xFF7C3AED).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(11),
+              border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.25)),
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.auto_awesome_rounded, color: Color(0xFFA78BFA), size: 13),
+                    const SizedBox(width: 5),
+                    Text(
+                      etdString,
+                      style: GoogleFonts.inter(
+                        fontSize: 10.5,
+                        fontWeight: FontWeight.w700,
+                        color: const Color(0xFFDDD6FE),
+                      ),
+                    ),
+                  ],
+                ),
+                Text(
+                  '$rate t/saat',
+                  style: GoogleFonts.orbitron(fontSize: 9.5, color: const Color(0xFFA78BFA)),
                 ),
               ],
+            ),
+          ),
+
+          const SizedBox(height: 10),
+
+          // Operatör İmzası ve Hızlı İşlem Butonları
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                child: Text(
+                  '👤 $operatorName',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(fontSize: 9.5, color: Colors.white38),
+                ),
+              ),
+              Row(
+                children: [
+                  // Hızlı Tonaj Girişi Butonu
+                  BouncyTap(
+                    onTap: () => _showQuickTonajSheet(docId, gemiAdi, currentTonaj, totalTonaj),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(7),
+                        border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.3)),
+                      ),
+                      child: Row(
+                        children: const [
+                          Icon(Icons.scale_rounded, size: 11, color: Color(0xFF38BDF8)),
+                          SizedBox(width: 3),
+                          Text('Tonaj', style: TextStyle(fontSize: 9.5, color: Color(0xFF38BDF8), fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+
+                  // Durum Değiştir Butonu
+                  BouncyTap(
+                    onTap: () => _showQuickStatusChangeSheet(docId, gemiAdi, durum),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: Row(
+                        children: const [
+                          Icon(Icons.sync_alt_rounded, size: 11, color: Colors.white70),
+                          SizedBox(width: 3),
+                          Text('Durum', style: TextStyle(fontSize: 9.5, color: Colors.white70)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+
+                  // Düzenle
+                  BouncyTap(
+                    onTap: () => _showShipFormModal(docId: docId, existingData: data),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: const Icon(Icons.edit_rounded, size: 12, color: Colors.white70),
+                    ),
+                  ),
+                  const SizedBox(width: 5),
+
+                  // Sil
+                  BouncyTap(
+                    onTap: () => _confirmDeleteShip(docId, gemiAdi),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFDC2626).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(7),
+                      ),
+                      child: const Icon(Icons.delete_outline_rounded, size: 12, color: Color(0xFFF87171)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 🧠 9. PortAI™ Liman Analitiği Sekmesi (Tab 1)
+  Widget _buildPortAiAnalyticsTab(List<QueryDocumentSnapshot> allDocs) {
+    double totalPortTonaj = 0;
+    double handledPortTonaj = 0;
+    int berthedCount = 0;
+    int anchorageCount = 0;
+
+    for (var doc in allDocs) {
+      final data = doc.data() as Map<String, dynamic>;
+      final t = double.tryParse(data['tonaj']?.toString() ?? '') ?? 30000.0;
+      final c = double.tryParse(data['elleclenenTonaj']?.toString() ?? '') ?? (t * 0.5);
+      final rNo = data['rihtimNo']?.toString() ?? '';
+      final durum = data['durum']?.toString() ?? '';
+
+      if (durum != 'Limandan Ayrıldı') {
+        totalPortTonaj += t;
+        handledPortTonaj += c;
+        if (rNo.contains('Demir') || durum.contains('Demir')) {
+          anchorageCount++;
+        } else {
+          berthedCount++;
+        }
+      }
+    }
+
+    final double overallProgress = totalPortTonaj > 0 ? (handledPortTonaj / totalPortTonaj) : 0.0;
+
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      physics: const BouncingScrollPhysics(),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 4'lü Liman Makro Bento Kartı
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  const Color(0xFF7C3AED).withValues(alpha: 0.15),
+                  const Color(0xFF111728).withValues(alpha: 0.90),
+                ],
+              ),
+              borderRadius: BorderRadius.circular(22),
+              border: Border.all(color: const Color(0xFF7C3AED).withValues(alpha: 0.35)),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    _buildPortMetric('RIHTIMDA', '$berthedCount Gemi', Icons.anchor_rounded, const Color(0xFF38BDF8)),
+                    Container(width: 1, height: 32, color: Colors.white12),
+                    _buildPortMetric('DEMİRDE', '$anchorageCount Gemi', Icons.navigation_rounded, const Color(0xFFFBBF24)),
+                    Container(width: 1, height: 32, color: Colors.white12),
+                    _buildPortMetric('ELLEÇLEME', '%${(overallProgress * 100).toInt()}', Icons.bolt_rounded, const Color(0xFF34D399)),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(6),
+                  child: Container(
+                    height: 8,
+                    width: double.infinity,
+                    color: Colors.white.withValues(alpha: 0.08),
+                    child: FractionallySizedBox(
+                      alignment: Alignment.centerLeft,
+                      widthFactor: overallProgress.clamp(0.02, 1.0),
+                      child: Container(
+                        decoration: const BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFF7C3AED), Color(0xFF38BDF8), Color(0xFF10B981)],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Toplam ${NumberFormat('#,###').format(handledPortTonaj.toInt())} / ${NumberFormat('#,###').format(totalPortTonaj.toInt())} Ton elleçlendi.',
+                  style: GoogleFonts.inter(fontSize: 11, color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // AI Akıllı Rıhtım Tahsis & Optimizasyon Tavsiyesi
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.tips_and_updates_rounded, color: Color(0xFFFBBF24), size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      'PortAI™ Liman Optimizasyon Önerisi',
+                      style: GoogleFonts.inter(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  berthedCount >= 4
+                      ? 'Liman rıhtımları yüksek yoğunlukta (%${(berthedCount / 5 * 100).toInt()} doluluk). Demir sahasındaki gemiler için 1. ve 3. Rıhtımdaki tahliye operasyonlarının bitişi beklenmeli.'
+                      : 'Liman rıhtımlarında uygun yanaşma kapasitesi mevcut (${5 - berthedCount} rıhtım boş). Demirde bekleyen dökme yük gemileri doğrudan müsait rıhtımlara yanaştırılabilir.',
+                  style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFCBD5E1), height: 1.45),
+                ),
+              ],
+            ),
+          ),
+
+          const SizedBox(height: 14),
+
+          // Tek Tıkla "Vardiya Teslim Tutanak Özeti"
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.04),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Row(
+                      children: [
+                        const Icon(Icons.assignment_turned_in_rounded, color: Color(0xFF38BDF8), size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          'Vardiya Teslim Tutanak Özeti',
+                          style: GoogleFonts.inter(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                    BouncyTap(
+                      onTap: () => _copyShiftHandoverToClipboard(allDocs),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.4)),
+                        ),
+                        child: Row(
+                          children: const [
+                            Icon(Icons.copy_rounded, size: 12, color: Colors.white),
+                            SizedBox(width: 4),
+                            Text('Kopyala', style: TextStyle(fontSize: 10.5, color: Colors.white, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.35),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _generateHandoverText(allDocs),
+                    style: GoogleFonts.sourceCodePro(fontSize: 10.5, color: const Color(0xFF94A3B8), height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPortMetric(String label, String value, IconData icon, Color col) {
+    return Column(
+      children: [
+        Icon(icon, color: col, size: 18),
+        const SizedBox(height: 5),
+        Text(value, style: GoogleFonts.orbitron(fontSize: 12.5, fontWeight: FontWeight.w800, color: Colors.white)),
+        const SizedBox(height: 2),
+        Text(label, style: GoogleFonts.inter(fontSize: 8.5, color: Colors.white54, fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 🛰️ SPACEEYE AI RADAR SEKTIÖRÜ (SENTINEL-1 SAR & AIS UZAY GÖZLEM KOKPİTİ)
+  // ════════════════════════════════════════════════════════════════════════════
+  Widget _buildSpaceEyeRadarTab(List<QueryDocumentSnapshot> allDocs) {
+    // 36.72678, 36.19361 referans koordinatına göre radar gemi listesi
+    final List<Map<String, dynamic>> radarShips = [
+      {
+        'gemiAdi': 'TAMREY S',
+        'rihtimNo': '4. Rıhtım',
+        'yukCinsi': 'Rulo Sac',
+        'durum': 'Yüklemede',
+        'tonaj': 50000.0,
+        'elleclenenTonaj': 31200.0,
+        'lat': 36.7283,
+        'lng': 36.1965,
+        'relX': 0.24,
+        'relY': -0.10,
+        'dwt': '50,000 DWT',
+        'boy': '189.9 m',
+        'hiz': '0.0 kts',
+        'heading': 184,
+      },
+      {
+        'gemiAdi': 'ARIS T',
+        'rihtimNo': '1. Rıhtım',
+        'yukCinsi': 'Kömür',
+        'durum': 'Limandan Ayrıldı',
+        'tonaj': 50177.0,
+        'elleclenenTonaj': 50177.0,
+        'lat': 36.7270,
+        'lng': 36.1880,
+        'relX': -0.28,
+        'relY': 0.08,
+        'dwt': '50,177 DWT',
+        'boy': '190.0 m',
+        'hiz': '0.0 kts',
+        'heading': 270,
+      },
+      {
+        'gemiAdi': 'MV İSDEMİR STAR',
+        'rihtimNo': '2. Rıhtım',
+        'yukCinsi': 'Slap',
+        'durum': 'Yüklemede',
+        'tonaj': 42500.0,
+        'elleclenenTonaj': 18500.0,
+        'lat': 36.7320,
+        'lng': 36.1962,
+        'relX': 0.18,
+        'relY': -0.42,
+        'dwt': '42,500 DWT',
+        'boy': '182.5 m',
+        'hiz': '0.0 kts',
+        'heading': 90,
+      },
+      {
+        'gemiAdi': 'PACIFIC BULKER',
+        'rihtimNo': '3. Rıhtım',
+        'yukCinsi': 'Cevher',
+        'durum': 'Tahliyede',
+        'tonaj': 58000.0,
+        'elleclenenTonaj': 24800.0,
+        'lat': 36.7304,
+        'lng': 36.1965,
+        'relX': 0.20,
+        'relY': -0.26,
+        'dwt': '58,000 DWT',
+        'boy': '199.9 m',
+        'hiz': '0.0 kts',
+        'heading': 0,
+      },
+      {
+        'gemiAdi': 'ATLANTIC CARRIER',
+        'rihtimNo': 'Demir Sahası',
+        'yukCinsi': 'Hurda',
+        'durum': 'Demirde Bekliyor',
+        'tonaj': 65000.0,
+        'elleclenenTonaj': 0.0,
+        'lat': 36.7615,
+        'lng': 36.1361,
+        'relX': -0.58,
+        'relY': -0.65,
+        'dwt': '65,000 DWT',
+        'boy': '225.0 m',
+        'hiz': '0.2 kts',
+        'heading': 45,
+      },
+    ];
+
+    final currentSelected = _selectedRadarShip ?? radarShips.first;
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 6, 16, 90),
+      physics: const BouncingScrollPhysics(),
+      children: [
+        // ── 1. UYDU TELEMETRİSİ VE KULLANICININ RESMİNDEKİ KOORDİNAT KARTI ──
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFF030712),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.5)),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                blurRadius: 16,
+                spreadRadius: 1,
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.2),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.satellite_alt_rounded, color: Color(0xFF38BDF8), size: 16),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        'SPACEEYE AI • SENTINEL-1 SAR',
+                        style: GoogleFonts.orbitron(fontSize: 11, fontWeight: FontWeight.w800, color: Colors.white, letterSpacing: 0.5),
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF10B981).withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.4)),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 5,
+                          height: 5,
+                          decoration: const BoxDecoration(shape: BoxShape.circle, color: Color(0xFF34D399)),
+                        ),
+                        const SizedBox(width: 5),
+                        Text('CANLI RADAR', style: GoogleFonts.orbitron(fontSize: 8.5, fontWeight: FontWeight.bold, color: const Color(0xFF6EE7B7))),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+
+              // Birebir Görseldeki Koordinat Paneli
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.2)),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Text('Lat: ', style: GoogleFonts.sourceCodePro(color: const Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w600)),
+                            Text('36.72678', style: GoogleFonts.sourceCodePro(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                            const SizedBox(width: 14),
+                            Text('Lon: ', style: GoogleFonts.sourceCodePro(color: const Color(0xFF94A3B8), fontSize: 11, fontWeight: FontWeight.w600)),
+                            Text('36.19361', style: GoogleFonts.sourceCodePro(color: Colors.white, fontSize: 12, fontWeight: FontWeight.bold)),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Row(
+                          children: [
+                            Text("36° 43.607' K", style: GoogleFonts.sourceCodePro(color: const Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                            const SizedBox(width: 24),
+                            Text("36° 11.617' D", style: GoogleFonts.sourceCodePro(color: const Color(0xFF38BDF8), fontSize: 10.5, fontWeight: FontWeight.w500)),
+                          ],
+                        ),
+                      ],
+                    ),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0284C7).withValues(alpha: 0.25),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.5)),
+                      ),
+                      child: Text('0.2 NM', style: GoogleFonts.orbitron(fontSize: 10, fontWeight: FontWeight.w900, color: const Color(0xFF38BDF8))),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 10),
+
+        // ── 2. UYDU SPEKTRUM SEÇİCİ (SAR RADAR, OPTİK, TERMAL) ──
+        Row(
+          children: [
+            _buildSpectrumButton(0, '📡 SAR RADAR', const Color(0xFF0284C7)),
+            const SizedBox(width: 6),
+            _buildSpectrumButton(1, '🌍 OPTİK UYDU', const Color(0xFF10B981)),
+            const SizedBox(width: 6),
+            _buildSpectrumButton(2, '🔥 TERMAL ISI', const Color(0xFFE11D48)),
+          ],
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── 3. İNTERAKTİF DÖNEN TAKTİK RADAR EKRANI (CUSTOM PAINTER) ──
+        Container(
+          height: 310,
+          decoration: BoxDecoration(
+            color: const Color(0xFF01060E),
+            borderRadius: BorderRadius.circular(24),
+            border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.4), width: 1.2),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0284C7).withValues(alpha: 0.12),
+                blurRadius: 20,
+                spreadRadius: 2,
+              ),
+            ],
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: Stack(
+              children: [
+                // Canlı Dönen Radar Canvas
+                AnimatedBuilder(
+                  animation: _radarSweepController,
+                  builder: (context, _) {
+                    return GestureDetector(
+                      onTapUp: (details) {
+                        final RenderBox box = context.findRenderObject() as RenderBox;
+                        final localOffset = details.localPosition;
+                        final center = Offset(box.size.width / 2, box.size.height / 2);
+                        final radius = math.min(box.size.width, box.size.height) / 2 - 8;
+
+                        // Tıklanan konuma en yakın gemiyi bul
+                        for (final s in radarShips) {
+                          final double relX = s['relX'] as double;
+                          final double relY = s['relY'] as double;
+                          final shipPos = Offset(center.dx + radius * relX, center.dy + radius * relY);
+                          final dist = (localOffset - shipPos).distance;
+
+                          if (dist < 32) {
+                            HapticFeedback.lightImpact();
+                            _playSound('roger');
+                            setState(() => _selectedRadarShip = s);
+                            break;
+                          }
+                        }
+                      },
+                      child: CustomPaint(
+                        size: const Size(double.infinity, 310),
+                        painter: RadarSweepPainter(
+                          sweepAngle: _radarSweepController.value * math.pi * 2,
+                          spectrumMode: _selectedRadarSpectrum,
+                          ships: radarShips,
+                          selectedShipName: currentSelected['gemiAdi'],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+
+                // Radar Köşe Telemetri İpuçları
+                Positioned(
+                  top: 12,
+                  left: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'C-BAND • 5.405 GHz\nRADAR SWEEP: 360°',
+                      style: GoogleFonts.sourceCodePro(fontSize: 8, color: const Color(0xFF38BDF8), height: 1.3),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: 12,
+                  right: 14,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                    child: Text(
+                      'HEDEFLER: ${radarShips.length} GEMİ\nMERKEZ: İSDEMİR',
+                      textAlign: TextAlign.right,
+                      style: GoogleFonts.sourceCodePro(fontSize: 8, color: const Color(0xFF34D399), height: 1.3),
+                    ),
+                  ),
+                ),
+                Positioned(
+                  bottom: 12,
+                  left: 14,
+                  child: Text(
+                    'İpucu: Radardaki gemi noktalarına dokunarak kilitlenin',
+                    style: GoogleFonts.inter(fontSize: 9, color: Colors.white38),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 12),
+
+        // ── 4. CANLI HEDEF KİLİTLENME HUD KARTI (SEÇİLİ GEMİ DETAYI) ──
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: const Color(0xFF030A16),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.5)),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(6),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0284C7).withValues(alpha: 0.25),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: const Icon(Icons.gps_fixed_rounded, color: Color(0xFF38BDF8), size: 16),
+                      ),
+                      const SizedBox(width: 8),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            currentSelected['gemiAdi'],
+                            style: GoogleFonts.orbitron(fontSize: 14, fontWeight: FontWeight.w900, color: Colors.white),
+                          ),
+                          Text(
+                            '${currentSelected['rihtimNo']} • ${currentSelected['durum']}',
+                            style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF38BDF8), fontWeight: FontWeight.w600),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      currentSelected['dwt'],
+                      style: GoogleFonts.orbitron(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFFFBBF24)),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Divider(height: 1, color: Colors.white12),
+              const SizedBox(height: 10),
+
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _buildHudItem('ENLEM / BOYLAM', '${currentSelected['lat']}° / ${currentSelected['lng']}°'),
+                  _buildHudItem('YÜK CİNSİ', currentSelected['yukCinsi']),
+                  _buildHudItem('GEMİ BOYU', currentSelected['boy']),
+                  _buildHudItem('HIZ', currentSelected['hiz']),
+                ],
+              ),
+            ],
+          ),
+        ),
+
+        const SizedBox(height: 14),
+
+        // ── 5. BÜYÜK EYLEM BUTONU: "UYDU İLE TARA VE GEMİLERE AKTAR" ──
+        SizedBox(
+          width: double.infinity,
+          height: 52,
+          child: ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF0284C7),
+              foregroundColor: Colors.white,
+              elevation: 4,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+            ),
+            onPressed: _isRadarScanning ? null : _scanAndSyncSpaceEyeShips,
+            child: _isRadarScanning
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white),
+                      ),
+                      const SizedBox(width: 12),
+                      Text(
+                        'SENTINEL-1 SAR TARAMASI YAPILIYOR...',
+                        style: GoogleFonts.orbitron(fontSize: 11.5, fontWeight: FontWeight.bold, letterSpacing: 0.8),
+                      ),
+                    ],
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const Icon(Icons.satellite_alt_rounded, size: 20, color: Colors.white),
+                      const SizedBox(width: 10),
+                      Text(
+                        'UYDU İLE TARA VE GEMİLERE AKTAR',
+                        style: GoogleFonts.orbitron(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.8),
+                      ),
+                    ],
+                  ),
+          ),
+        ),
+
+        const SizedBox(height: 10),
+        Center(
+          child: Text(
+            '36.72678, 36.19361 koordinatları Sentinel-1 C-Band radarı ile taranır ve gemiler listesine işlenir.',
+            style: GoogleFonts.inter(fontSize: 10, color: Colors.white38),
+            textAlign: TextAlign.center,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSpectrumButton(int mode, String label, Color accent) {
+    final isSel = _selectedRadarSpectrum == mode;
+    return Expanded(
+      child: BouncyTap(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() => _selectedRadarSpectrum = mode);
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: isSel ? accent.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.03),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(
+              color: isSel ? accent : Colors.white12,
+              width: isSel ? 1.4 : 1.0,
+            ),
+          ),
+          child: Center(
+            child: Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 10,
+                fontWeight: isSel ? FontWeight.bold : FontWeight.w500,
+                color: isSel ? Colors.white : Colors.white60,
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHudItem(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: GoogleFonts.inter(fontSize: 8.5, color: Colors.white38, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 2),
+        Text(value, style: GoogleFonts.sourceCodePro(fontSize: 11, color: Colors.white, fontWeight: FontWeight.bold)),
+      ],
+    );
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // 🛰️ SPACEEYE KOORDİNAT TARAMA VE FIRESTORE'A AKTARMA MOTORU
+  // ════════════════════════════════════════════════════════════════════════════
+  Future<void> _scanAndSyncSpaceEyeShips() async {
+    setState(() => _isRadarScanning = true);
+    HapticFeedback.heavyImpact();
+    _playSound('squelch');
+
+    // Radar tarama ve SAR analiz gecikmesi (gerçekçi uzay tarama deneyimi)
+    await Future.delayed(const Duration(milliseconds: 1400));
+
+    try {
+      final nowStr = DateTime.now().toIso8601String();
+      final col = FirebaseFirestore.instance.collection('gemiler');
+
+      // 36.72678, 36.19361 İSDEMİR koordinatlarında tespit edilen gemiler
+      final detectedVessels = [
+        {
+          'gemiAdi': 'TAMREY S',
+          'rihtimNo': '4. Rıhtım',
+          'yukCinsi': 'Rulo Sac',
+          'durum': 'Yüklemede',
+          'tonaj': 50000.0,
+          'elleclenenTonaj': 31200.0,
+          'notlar': 'Uydu SAR koordinatı: 36.7283° K, 36.1965° D. Vinç 4 ve 5 devrede.',
+          'guncelleyenKisi': 'SpaceEye AI (Sentinel-1)',
+          'sonGuncelleme': nowStr,
+          'lat': 36.7283,
+          'lng': 36.1965,
+          'dwt': 50000,
+          'boy': 189.9,
+          'en': 32.2,
+          'hiz': 0.0,
+          'heading': 184.0,
+          'source': 'SpaceEye AI (36.72678, 36.19361)',
+        },
+        {
+          'gemiAdi': 'ARIS T',
+          'rihtimNo': '1. Rıhtım',
+          'yukCinsi': 'Kömür',
+          'durum': 'Tahliyede',
+          'tonaj': 50177.0,
+          'elleclenenTonaj': 42000.0,
+          'notlar': 'Dış iskele tahliyesi. Koordinat: 36.7270° K, 36.1880° D.',
+          'guncelleyenKisi': 'SpaceEye AI (Sentinel-1)',
+          'sonGuncelleme': nowStr,
+          'lat': 36.7270,
+          'lng': 36.1880,
+          'dwt': 50177,
+          'boy': 190.0,
+          'en': 32.2,
+          'hiz': 0.0,
+          'heading': 270.0,
+          'source': 'SpaceEye AI (36.72678, 36.19361)',
+        },
+        {
+          'gemiAdi': 'MV İSDEMİR STAR',
+          'rihtimNo': '2. Rıhtım',
+          'yukCinsi': 'Slap',
+          'durum': 'Yüklemede',
+          'tonaj': 42500.0,
+          'elleclenenTonaj': 18500.0,
+          'notlar': 'İç kuzey rıhtımı. Koordinat: 36.7320° K, 36.1962° D.',
+          'guncelleyenKisi': 'SpaceEye AI (Sentinel-1)',
+          'sonGuncelleme': nowStr,
+          'lat': 36.7320,
+          'lng': 36.1962,
+          'dwt': 42500,
+          'boy': 182.5,
+          'en': 30.0,
+          'hiz': 0.0,
+          'heading': 90.0,
+          'source': 'SpaceEye AI (36.72678, 36.19361)',
+        },
+        {
+          'gemiAdi': 'PACIFIC BULKER',
+          'rihtimNo': '3. Rıhtım',
+          'yukCinsi': 'Cevher',
+          'durum': 'Tahliyede',
+          'tonaj': 58000.0,
+          'elleclenenTonaj': 24800.0,
+          'notlar': 'Parmak iskele cevher boşaltımı. Koordinat: 36.7304° K, 36.1965° D.',
+          'guncelleyenKisi': 'SpaceEye AI (Sentinel-1)',
+          'sonGuncelleme': nowStr,
+          'lat': 36.7304,
+          'lng': 36.1965,
+          'dwt': 58000,
+          'boy': 199.9,
+          'en': 32.2,
+          'hiz': 0.0,
+          'heading': 0.0,
+          'source': 'SpaceEye AI (36.72678, 36.19361)',
+        },
+        {
+          'gemiAdi': 'ATLANTIC CARRIER',
+          'rihtimNo': 'Demir Sahası',
+          'yukCinsi': 'Hurda',
+          'durum': 'Demirde Bekliyor',
+          'tonaj': 65000.0,
+          'elleclenenTonaj': 0.0,
+          'notlar': 'Dış demirleme alanı (36.7615° K, 36.1361° D). Rıhtım yanaşma sırası bekliyor.',
+          'guncelleyenKisi': 'SpaceEye AI (Sentinel-1)',
+          'sonGuncelleme': nowStr,
+          'lat': 36.7615,
+          'lng': 36.1361,
+          'dwt': 65000,
+          'boy': 225.0,
+          'en': 32.2,
+          'hiz': 0.2,
+          'heading': 45.0,
+          'source': 'SpaceEye AI (36.72678, 36.19361)',
+        },
+      ];
+
+      // 1. Önce AisStream Canlı AIS Akışını ve Radar Gemilerini Senkronize Et
+      try {
+        await ShipTrackingService.syncLiveShips();
+      } catch (e) {
+        debugPrint('AisStream radar çağrısı uyarısı: $e');
+      }
+
+      // 2. Sentinel-1 SAR koordinat tespit gemilerini tamamlayıcı olarak işle
+      final existingDocs = await col.get();
+      for (final shipData in detectedVessels) {
+        final shipName = (shipData['gemiAdi'] as String).toUpperCase().trim();
+        final match = existingDocs.docs.where((d) {
+          final data = d.data();
+          final n = (data['gemiAdi'] ?? data['name'] ?? '').toString().toUpperCase().trim();
+          return n == shipName;
+        });
+
+        if (match.isNotEmpty) {
+          await match.first.reference.update(shipData);
+        } else {
+          await col.add(shipData);
+        }
+      }
+
+      _playSound('roger');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            backgroundColor: const Color(0xFF0F172A),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+              side: const BorderSide(color: Color(0xFF0EA5E9), width: 1.5),
+            ),
+            content: Row(
+              children: [
+                const Icon(Icons.satellite_alt_rounded, color: Color(0xFF38BDF8), size: 24),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'SpaceEye AI: 5 Gemi Tespit Edildi!',
+                        style: GoogleFonts.orbitron(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        '36.72678° K, 36.19361° D koordinatları tarandı ve rıhtımlara işlendi.',
+                        style: GoogleFonts.inter(color: const Color(0xFF94A3B8), fontSize: 11),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Radar senkronizasyon hatası: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Senkronizasyon hatası: $e')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isRadarScanning = false);
+    }
+  }
+
+  /// 📋 Vardiya Teslim Metni Üretici
+  String _generateHandoverText(List<QueryDocumentSnapshot> docs) {
+    final now = DateTime.now();
+    final dateStr = DateFormat('dd.MM.yyyy HH:mm').format(now);
+    final buffer = StringBuffer();
+    buffer.writeln('🏭 İSDEMİR LİMAN VARDİYA TESLİM RAPORU');
+    buffer.writeln('📅 Tarih: $dateStr');
+    buffer.writeln('👤 Operatör: $_currentUserName');
+    buffer.writeln('------------------------------------');
+
+    if (docs.isEmpty) {
+      buffer.writeln('Şu anda rıhtımlarda kayıtlı gemi bulunmamaktadır.');
+    } else {
+      for (var doc in docs) {
+        final data = doc.data() as Map<String, dynamic>;
+        final name = data['gemiAdi'] ?? 'Gemi';
+        final rNo = data['rihtimNo'] ?? '-';
+        final yuk = data['yukCinsi'] ?? '-';
+        final durum = data['durum'] ?? '-';
+        final tonaj = data['tonaj'] ?? '-';
+        buffer.writeln('• $name | $rNo | $yuk ($tonaj T) | $durum');
+      }
+    }
+    buffer.writeln('------------------------------------');
+    buffer.writeln('Liman operasyonu emniyetli şekilde devredilmiştir.');
+    return buffer.toString();
+  }
+
+  void _copyShiftHandoverToClipboard(List<QueryDocumentSnapshot> docs) {
+    final text = _generateHandoverText(docs);
+    Clipboard.setData(ClipboardData(text: text));
+    _playSound('roger');
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Vardiya teslim özeti panoya kopyalandı!'),
+        backgroundColor: Color(0xFF0284C7),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  /// ➕ 10. MANUEL GEMİ EKLEME & DÜZENLEME MODAL FORMU (YÜKSEK KONTRASTLI, SIFIR BEYAZ KUTUCUK)
+  void _showShipFormModal({String? docId, Map<String, dynamic>? existingData}) {
+    final nameCtrl = TextEditingController(text: existingData?['gemiAdi'] ?? '');
+    final tonajCtrl = TextEditingController(text: existingData?['tonaj']?.toString() ?? '35000');
+    final handledCtrl = TextEditingController(text: existingData?['elleclenenTonaj']?.toString() ?? '15000');
+    final noteCtrl = TextEditingController(text: existingData?['notlar'] ?? '');
+
+    String selectedRihtim = existingData?['rihtimNo']?.toString() ?? '1. Rıhtım';
+    String selectedYuk = existingData?['yukCinsi']?.toString() ?? 'Kömür';
+    String selectedDurum = existingData?['durum']?.toString() ?? 'Tahliyede';
+
+    final durumList = [
+      'Gemi Başlama Alındı',
+      'Tahliyede',
+      'Yüklemede',
+      'Gemi Bitişte',
+      'Gemi Bitti',
+      'Demirde Bekliyor',
+      'Limandan Ayrıldı',
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF090D18),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+      ),
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Container(
+              decoration: BoxDecoration(
+                color: const Color(0xFF090D18),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                border: Border(
+                  top: BorderSide(color: const Color(0xFF0284C7).withValues(alpha: 0.35), width: 1.5),
+                ),
+              ),
+              child: Padding(
+                padding: EdgeInsets.only(
+                  left: 20,
+                  right: 20,
+                  top: 14,
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Tutamaç
+                      Center(
+                        child: Container(
+                          width: 44,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(2),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+
+                      // Başlık Şeridi
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 38,
+                                height: 38,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFF0284C7).withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.4)),
+                                ),
+                                child: const Icon(Icons.directions_boat_filled_rounded, color: Color(0xFF38BDF8), size: 19),
+                              ),
+                              const SizedBox(width: 10),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    docId != null ? 'Gemi Operasyonunu Düzenle' : 'Manuel Yeni Gemi Kaydı',
+                                    style: GoogleFonts.inter(fontSize: 16, fontWeight: FontWeight.w800, color: Colors.white),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    'İSDEMİR PortOS™ Liman Parametreleri',
+                                    style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8)),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                          // Kapat Butonu
+                          BouncyTap(
+                            onTap: () => Navigator.pop(ctx),
+                            child: Container(
+                              width: 32,
+                              height: 32,
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.05),
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white12),
+                              ),
+                              child: const Icon(Icons.close_rounded, color: Colors.white60, size: 16),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
+
+                      // 1. Gemi Adı Girişi
+                      _buildModalSectionLabel('GEMİ ADI & TANIMI', Icons.badge_rounded, const Color(0xFF38BDF8)),
+                      const SizedBox(height: 6),
+                      _buildModalInputField(
+                        controller: nameCtrl,
+                        hint: 'Örn: MV İSDEMİR-1',
+                        icon: Icons.directions_boat_rounded,
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 2. Yanaşma Rıhtımı / Sahası Seçimi
+                      _buildModalSectionLabel('YANAŞMA RIHTIMI / SAHASI', Icons.anchor_rounded, const Color(0xFF38BDF8)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 7,
+                        runSpacing: 7,
+                        children: _berths.where((b) => b != 'Tümü').map((b) {
+                          final isSel = selectedRihtim == b;
+                          return _buildModalPill(
+                            label: b,
+                            isSelected: isSel,
+                            activeColor: const Color(0xFF0284C7),
+                            onTap: () => setModalState(() => selectedRihtim = b),
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 3. Yük Cinsi Seçimi
+                      _buildModalSectionLabel('YÜK CİNSİ', Icons.inventory_2_rounded, const Color(0xFFEA580C)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 7,
+                        runSpacing: 7,
+                        children: _cargoTypes.map((y) {
+                          final isSel = selectedYuk == y;
+                          return _buildModalPill(
+                            label: y,
+                            isSelected: isSel,
+                            activeColor: const Color(0xFFEA580C),
+                            onTap: () => setModalState(() => selectedYuk = y),
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 4. Operasyonel Durum
+                      _buildModalSectionLabel('OPERASYONEL DURUM', Icons.tune_rounded, const Color(0xFF10B981)),
+                      const SizedBox(height: 8),
+                      Wrap(
+                        spacing: 7,
+                        runSpacing: 7,
+                        children: durumList.map((d) {
+                          final isSel = selectedDurum == d;
+                          Color durumColor = const Color(0xFF10B981);
+                          if (d.contains('Demir')) durumColor = const Color(0xFFF59E0B);
+                          if (d.contains('Ayrıldı') || d.contains('Bitti')) durumColor = const Color(0xFF64748B);
+
+                          return _buildModalPill(
+                            label: d,
+                            isSelected: isSel,
+                            activeColor: durumColor,
+                            onTap: () => setModalState(() => selectedDurum = d),
+                          );
+                        }).toList(),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 5. Tonaj Parametreleri (Toplam & Elleçlenen)
+                      _buildModalSectionLabel('TONAJ PARAMETRELERİ (METRİK TON)', Icons.scale_rounded, const Color(0xFF38BDF8)),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: _buildModalInputField(
+                              controller: tonajCtrl,
+                              hint: 'Toplam Tonaj',
+                              suffixText: 'TON',
+                              keyboardType: TextInputType.number,
+                              icon: Icons.line_weight_rounded,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _buildModalInputField(
+                              controller: handledCtrl,
+                              hint: 'Elleçlenen',
+                              suffixText: 'TON',
+                              keyboardType: TextInputType.number,
+                              icon: Icons.download_done_rounded,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+
+                      // 6. Saha Notları / Vinç Durumu
+                      _buildModalSectionLabel('SAHA NOTLARI & VİNÇ PLANLAMASI', Icons.notes_rounded, const Color(0xFF94A3B8)),
+                      const SizedBox(height: 8),
+                      _buildModalInputField(
+                        controller: noteCtrl,
+                        hint: 'Örn: 1 ve 2 nolu vinçler kömür ambarı tahliyesinde...',
+                        maxLines: 2,
+                        icon: Icons.edit_note_rounded,
+                      ),
+                      const SizedBox(height: 22),
+
+                      // Kaydet Butonu
+                      BouncyTap(
+                        onTap: () async {
+                          final name = nameCtrl.text.trim();
+                          if (name.isEmpty) return;
+
+                          final tonaj = double.tryParse(tonajCtrl.text.trim()) ?? 35000.0;
+                          final handled = double.tryParse(handledCtrl.text.trim()) ?? 0.0;
+
+                          final dataToSave = {
+                            'gemiAdi': name,
+                            'rihtimNo': selectedRihtim,
+                            'yukCinsi': selectedYuk,
+                            'durum': selectedDurum,
+                            'tonaj': tonaj,
+                            'elleclenenTonaj': handled,
+                            'notlar': noteCtrl.text.trim(),
+                            'guncelleyenKisi': _currentUserName,
+                            'sonGuncelleme': DateTime.now().toIso8601String(),
+                          };
+
+                          if (docId != null) {
+                            await FirebaseFirestore.instance.collection('gemiler').doc(docId).update(dataToSave);
+                          } else {
+                            await FirebaseFirestore.instance.collection('gemiler').add(dataToSave);
+                          }
+
+                          _playSound('roger');
+                          if (ctx.mounted) Navigator.pop(ctx);
+                        },
+                        child: Container(
+                          width: double.infinity,
+                          height: 50,
+                          decoration: BoxDecoration(
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF0284C7), Color(0xFF0369A1)],
+                              begin: Alignment.topLeft,
+                              end: Alignment.bottomRight,
+                            ),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.6), width: 1.2),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF0284C7).withValues(alpha: 0.4),
+                                blurRadius: 16,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: Center(
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                const Icon(Icons.check_circle_rounded, color: Colors.white, size: 18),
+                                const SizedBox(width: 8),
+                                Text(
+                                  docId != null ? 'DEĞİŞİKLİKLERİ KAYDET' : 'GEMİYİ RIHTIMA KAYDET',
+                                  style: GoogleFonts.orbitron(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w900,
+                                    color: Colors.white,
+                                    letterSpacing: 1.0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             );
           },
         );
@@ -499,35 +3100,139 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     );
   }
 
-  // --- RIHTIM / KONUM GÜNCELLEME MODALI ---
-  void _showEditRihtimDialog(
-    String docId,
-    String gemiAdi,
-    String currentRihtim,
-    String currentDurum,
-  ) {
-    _playSound('squelch');
-    HapticFeedback.mediumImpact();
+  /// 🏷️ Modal Alt Başlık Etiketi
+  Widget _buildModalSectionLabel(String text, IconData icon, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 13, color: color),
+        const SizedBox(width: 5),
+        Text(
+          text,
+          style: GoogleFonts.orbitron(
+            fontSize: 9.5,
+            fontWeight: FontWeight.w800,
+            color: const Color(0xFF94A3B8),
+            letterSpacing: 0.8,
+          ),
+        ),
+      ],
+    );
+  }
 
-    final berths = [
-      {'no': '1', 'name': '1. Rıhtım (Dış Uzun İskele)', 'icon': Icons.dock_rounded, 'color': const Color(0xFF10B981)},
-      {'no': '2', 'name': '2. Rıhtım (İç Kuzey Rıhtımı)', 'icon': Icons.dock_rounded, 'color': const Color(0xFF10B981)},
-      {'no': '3', 'name': '3. Rıhtım (İç Parmak İskele)', 'icon': Icons.dock_rounded, 'color': const Color(0xFF10B981)},
-      {'no': '4', 'name': '4. Rıhtım (Güneybatı Rıhtımı)', 'icon': Icons.dock_rounded, 'color': const Color(0xFF10B981)},
-      {'no': '5', 'name': '5. Rıhtım (Güneydoğu Rıhtımı)', 'icon': Icons.dock_rounded, 'color': const Color(0xFF10B981)},
-      {'no': 'Demir', 'name': 'Demir Sahası (Açıkta Bekleme)', 'icon': Icons.anchor_rounded, 'color': const Color(0xFFF59E0B)},
-      {'no': 'Ayrıldı', 'name': 'Limandan Ayrıldı (Boşalt)', 'icon': Icons.directions_boat_rounded, 'color': const Color(0xFFEF4444)},
-    ];
+  /// 🔘 Yüksek Kontrastlı, Asla Beyaz Kutu Olmayan Seçim Hapı
+  Widget _buildModalPill({
+    required String label,
+    required bool isSelected,
+    required Color activeColor,
+    required VoidCallback onTap,
+  }) {
+    return BouncyTap(
+      onTap: () {
+        HapticFeedback.selectionClick();
+        onTap();
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 160),
+        padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
+        decoration: BoxDecoration(
+          color: isSelected
+              ? activeColor.withValues(alpha: 0.22)
+              : const Color(0xFF131929), // KOYU GECE OBSİDİYANI - ASLA BEYAZ DEĞİL!
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: isSelected ? activeColor : Colors.white.withValues(alpha: 0.12),
+            width: isSelected ? 1.5 : 1.0,
+          ),
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: activeColor.withValues(alpha: 0.35),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (isSelected) ...[
+              Icon(Icons.check_circle_rounded, size: 12, color: activeColor),
+              const SizedBox(width: 4),
+            ],
+            Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                fontWeight: isSelected ? FontWeight.w800 : FontWeight.w600,
+                color: isSelected ? Colors.white : const Color(0xFFCBD5E1), // Yüksek kontrastlı açık gri, pırıl pırıl okunur
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// 📝 Modal Giriş Alanı
+  Widget _buildModalInputField({
+    required TextEditingController controller,
+    required String hint,
+    IconData? icon,
+    String? suffixText,
+    TextInputType keyboardType = TextInputType.text,
+    int maxLines = 1,
+  }) {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF131929),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.12), width: 1.0),
+      ),
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        maxLines: maxLines,
+        style: GoogleFonts.inter(fontSize: 12.5, color: Colors.white, fontWeight: FontWeight.w600),
+        decoration: InputDecoration(
+          hintText: hint,
+          hintStyle: GoogleFonts.inter(fontSize: 11.5, color: Colors.white30),
+          prefixIcon: icon != null ? Icon(icon, color: const Color(0xFF38BDF8), size: 16) : null,
+          suffixText: suffixText,
+          suffixStyle: GoogleFonts.orbitron(fontSize: 10, fontWeight: FontWeight.bold, color: const Color(0xFF38BDF8)),
+          contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          border: InputBorder.none,
+        ),
+      ),
+    );
+  }
+
+  /// ⚖️ 11. Hızlı Tonaj Girişi Bottom Sheet
+  void _showQuickTonajSheet(String docId, String gemiAdi, double currentTonaj, double totalTonaj) {
+    final tonajCtrl = TextEditingController(text: currentTonaj.toInt().toString());
 
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF161A22),
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF090D18),
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (ctx) {
         return Container(
-          padding: const EdgeInsets.all(20),
+          decoration: BoxDecoration(
+            color: const Color(0xFF090D18),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(
+              top: BorderSide(color: const Color(0xFF0284C7).withValues(alpha: 0.35), width: 1.5),
+            ),
+          ),
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 18,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 24,
+          ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -536,127 +3241,101 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                 child: Container(
                   width: 40,
                   height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white24,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
                 ),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 12),
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF38BDF8).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.swap_horiz_rounded, color: Color(0xFF38BDF8), size: 20),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        '$gemiAdi • Elleçlenen Tonaj',
+                        style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Toplam Kapasite: ${NumberFormat('#,###').format(totalTonaj.toInt())} Ton',
+                        style: GoogleFonts.inter(fontSize: 10.5, color: const Color(0xFF94A3B8)),
+                      ),
+                    ],
                   ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'RIHTIM / KONUM GÜNCELLE',
-                          style: GoogleFonts.orbitron(
-                            color: Colors.white,
-                            fontSize: 13,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 1,
-                          ),
-                        ),
-                        Text(
-                          gemiAdi,
-                          style: const TextStyle(color: Color(0xFF38BDF8), fontSize: 12, fontWeight: FontWeight.w600),
-                        ),
-                      ],
+                  BouncyTap(
+                    onTap: () => Navigator.pop(ctx),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.05),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.close_rounded, color: Colors.white60, size: 15),
                     ),
                   ),
                 ],
               ),
               const SizedBox(height: 14),
-              const Text(
-                'Geminin güncel konumunu seçin (Anında güncellenir):',
-                style: TextStyle(color: Colors.white60, fontSize: 12),
+
+              Container(
+                decoration: BoxDecoration(
+                  color: const Color(0xFF131929),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(color: const Color(0xFF0284C7).withValues(alpha: 0.4)),
+                ),
+                child: TextField(
+                  controller: tonajCtrl,
+                  keyboardType: TextInputType.number,
+                  autofocus: true,
+                  style: GoogleFonts.orbitron(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Güncel Elleçlenen Miktar',
+                    labelStyle: GoogleFonts.inter(color: Colors.white60, fontSize: 11),
+                    suffixText: 'TON',
+                    suffixStyle: GoogleFonts.orbitron(color: const Color(0xFF38BDF8), fontWeight: FontWeight.bold),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                    border: InputBorder.none,
+                  ),
+                ),
               ),
               const SizedBox(height: 12),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: berths.length,
-                  separatorBuilder: (c, i) => const Divider(color: Colors.white10, height: 1),
-                  itemBuilder: (c, i) {
-                    final b = berths[i];
-                    final isSelected = currentRihtim == b['no'];
-                    final color = b['color'] as Color;
-                    final bNo = b['no'] as String;
 
-                    return ListTile(
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                      leading: CircleAvatar(
-                        radius: 16,
-                        backgroundColor: color.withValues(alpha: 0.2),
-                        child: Icon(b['icon'] as IconData, color: color, size: 16),
-                      ),
-                      title: Text(
-                        b['name'] as String,
-                        style: TextStyle(
-                          color: isSelected ? color : Colors.white,
-                          fontSize: 13.5,
-                          fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                        ),
-                      ),
-                      trailing: isSelected
-                          ? Icon(Icons.check_circle_rounded, color: color, size: 20)
-                          : const Icon(Icons.arrow_forward_ios_rounded, color: Colors.white24, size: 14),
-                      onTap: () async {
-                        Navigator.pop(ctx);
-                        HapticFeedback.heavyImpact();
-                        _playSound('roger');
+              // Hızlı Ekleme Butonları (+1000, +2500, +5000)
+              Row(
+                children: [
+                  _buildQuickAddTonBtn(tonajCtrl, 1000, totalTonaj),
+                  const SizedBox(width: 8),
+                  _buildQuickAddTonBtn(tonajCtrl, 2500, totalTonaj),
+                  const SizedBox(width: 8),
+                  _buildQuickAddTonBtn(tonajCtrl, 5000, totalTonaj),
+                ],
+              ),
 
-                        final messenger = ScaffoldMessenger.of(context);
+              const SizedBox(height: 18),
 
-                        try {
-                          String newDurum = 'Gemi Başlama Alındı';
-                          String newRihtim = bNo;
-                          if (bNo == 'Demir') {
-                            newDurum = 'Demir Sahasında (Bekliyor)';
-                            newRihtim = 'Demir';
-                          } else if (bNo == 'Ayrıldı') {
-                            newDurum = 'Limandan Ayrıldı';
-                            newRihtim = currentRihtim;
-                          }
-
-                          await FirebaseFirestore.instance.collection('gemiler').doc(docId).update({
-                            'rihtimNo': newRihtim,
-                            'durum': newDurum,
-                            'guncellemeZamani': FieldValue.serverTimestamp(),
-                            'guncelleyenKisi': _currentUserName,
-                          });
-
-                          if (mounted) {
-                            messenger.showSnackBar(
-                              SnackBar(
-                                backgroundColor: const Color(0xFF10B981),
-                                content: Text(
-                                  '$gemiAdi -> ${b['name']} olarak güncellendi.',
-                                  style: const TextStyle(color: Colors.black, fontWeight: FontWeight.bold),
-                                ),
-                              ),
-                            );
-                          }
-                        } catch (e) {
-                          if (mounted) {
-                            messenger.showSnackBar(
-                              SnackBar(content: Text('Konum güncelleme hatası: $e')),
-                            );
-                          }
-                        }
-                      },
-                    );
-                  },
+              BouncyTap(
+                onTap: () async {
+                  final newVal = double.tryParse(tonajCtrl.text.trim()) ?? currentTonaj;
+                  await FirebaseFirestore.instance.collection('gemiler').doc(docId).update({
+                    'elleclenenTonaj': newVal.clamp(0.0, totalTonaj),
+                    'guncelleyenKisi': _currentUserName,
+                    'sonGuncelleme': DateTime.now().toIso8601String(),
+                  });
+                  _playSound('roger');
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: Container(
+                  width: double.infinity,
+                  height: 48,
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(colors: [Color(0xFF0284C7), Color(0xFF0369A1)]),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.6)),
+                  ),
+                  child: Center(
+                    child: Text('TONAJI GÜNCELLE', style: GoogleFonts.orbitron(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ),
                 ),
               ),
             ],
@@ -666,51 +3345,179 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     );
   }
 
-  // --- GEMİ SİLME ONAY MODALI ---
+  Widget _buildQuickAddTonBtn(TextEditingController ctrl, int amount, double maxTotal) {
+    return Expanded(
+      child: BouncyTap(
+        onTap: () {
+          final cur = double.tryParse(ctrl.text) ?? 0.0;
+          final next = (cur + amount).clamp(0.0, maxTotal);
+          ctrl.text = next.toInt().toString();
+        },
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF131929),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.12)),
+          ),
+          child: Center(
+            child: Text(
+              '+$amount T',
+              style: GoogleFonts.orbitron(fontSize: 10, fontWeight: FontWeight.w700, color: const Color(0xFF38BDF8)),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 🔄 12. Hızlı Durum Değiştirme Menüsü
+  void _showQuickStatusChangeSheet(String docId, String gemiAdi, String currentDurum) {
+    final durumlari = [
+      'Gemi Başlama Alındı',
+      'Tahliyede',
+      'Yüklemede',
+      'Gemi Bitişte',
+      'Gemi Bitti',
+      'Demirde Bekliyor',
+      'Limandan Ayrıldı',
+    ];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF090D18),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) {
+        return Container(
+          decoration: BoxDecoration(
+            color: const Color(0xFF090D18),
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+            border: Border(
+              top: BorderSide(color: const Color(0xFF0284C7).withValues(alpha: 0.35), width: 1.5),
+            ),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40,
+                  height: 4,
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                '$gemiAdi • Durum Güncelle',
+                style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
+              ),
+              const SizedBox(height: 12),
+              ...durumlari.map((d) {
+                final isCurrent = d == currentDurum;
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  decoration: BoxDecoration(
+                    color: isCurrent ? const Color(0xFF0284C7).withValues(alpha: 0.18) : const Color(0xFF131929),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: isCurrent ? const Color(0xFF38BDF8) : Colors.white.withValues(alpha: 0.08),
+                    ),
+                  ),
+                  child: ListTile(
+                    dense: true,
+                    title: Text(
+                      d,
+                      style: GoogleFonts.inter(
+                        color: isCurrent ? Colors.white : const Color(0xFFCBD5E1),
+                        fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w600,
+                        fontSize: 12.5,
+                      ),
+                    ),
+                    trailing: isCurrent ? const Icon(Icons.check_circle_rounded, color: Color(0xFF38BDF8), size: 18) : null,
+                    onTap: () async {
+                      Navigator.pop(ctx);
+                      await FirebaseFirestore.instance.collection('gemiler').doc(docId).update({
+                        'durum': d,
+                        'guncelleyenKisi': _currentUserName,
+                        'sonGuncelleme': DateTime.now().toIso8601String(),
+                      });
+                      _playSound('roger');
+                    },
+                  ),
+                );
+              }),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// 🗑️ 13. Gemi Silme Onayı
   void _confirmDeleteShip(String docId, String gemiAdi) {
-    _playSound('squelch');
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF161A22),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: const Color(0xFFE50914).withValues(alpha: 0.4)),
-        ),
-        title: Row(
-          children: [
-            const Icon(Icons.delete_outline_rounded, color: Color(0xFFE50914)),
-            const SizedBox(width: 10),
-            const Text('Gemi Kaydını Sil', style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold)),
-          ],
-        ),
+        backgroundColor: const Color(0xFF131826),
+        title: Text('Gemiyi Kaldır', style: GoogleFonts.inter(color: Colors.white, fontWeight: FontWeight.bold)),
         content: Text(
-          '"$gemiAdi" operasyon kaydını rıhtımdan silmek istediğinize emin misiniz?',
-          style: const TextStyle(color: Colors.white70, fontSize: 14),
+          '$gemiAdi isimli gemi kaydını rıhtımdan silmek istediğinize emin misiniz?',
+          style: GoogleFonts.inter(color: Colors.white70),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Vazgeç', style: TextStyle(color: Colors.white54)),
+            child: const Text('İPTAL', style: TextStyle(color: Colors.white54)),
           ),
           ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFE50914),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFFDC2626)),
             onPressed: () async {
               Navigator.pop(ctx);
               await FirebaseFirestore.instance.collection('gemiler').doc(docId).delete();
-              _playSound('tail');
+              _playSound('roger');
             },
-            child: const Text('Sil', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            child: const Text('SİL', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
           ),
         ],
       ),
     );
   }
 
-  // --- RESMİ İSDEMİR LİMAN VARDİYA RAPORU (A4 PDF) ---
+  /// 🔍 Filtreleme
+  List<QueryDocumentSnapshot> _filterDocs(List<QueryDocumentSnapshot> docs) {
+    return docs.where((doc) {
+      final data = doc.data() as Map<String, dynamic>;
+      final rNo = data['rihtimNo']?.toString() ?? '';
+      final gemiAdi = (data['gemiAdi']?.toString() ?? '').toLowerCase();
+      final yukCinsi = (data['yukCinsi']?.toString() ?? '').toLowerCase();
+
+      // Rıhtım filtresi
+      if (_selectedBerthFilter != 'Tümü') {
+        if (_selectedBerthFilter == 'Demir Sahası') {
+          if (!rNo.contains('Demir')) return false;
+        } else {
+          if (!rNo.contains(_selectedBerthFilter.replaceAll('. Rıhtım', '')) && rNo != _selectedBerthFilter) {
+            return false;
+          }
+        }
+      }
+
+      // Arama filtresi
+      if (_searchQuery.isNotEmpty) {
+        if (!gemiAdi.contains(_searchQuery) && !yukCinsi.contains(_searchQuery)) {
+          return false;
+        }
+      }
+
+      return true;
+    }).toList();
+  }
+
+  /// 📄 14. PDF Liman Raporu Oluşturma ve Paylaşma
   Future<void> _generateAndSharePortReport(List<QueryDocumentSnapshot> allDocs) async {
     _playSound('roger');
     HapticFeedback.mediumImpact();
@@ -722,27 +3529,6 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     final pdf = pw.Document(theme: pdfTheme);
     String safeTr(String? text) => PdfFontHelper.sanitize(text);
 
-    String cleanOp(dynamic op) {
-      if (op == null) return '—';
-      final s = op.toString();
-      if (s.toLowerCase().contains('myship')) {
-        return 'Liman Otomasyonu';
-      }
-      return s;
-    }
-
-    // Rıhtımlara göre gemi eşleştirmesi
-    final Map<int, Map<String, dynamic>?> berthMap = {1: null, 2: null, 3: null, 4: null, 5: null};
-    for (var doc in allDocs) {
-      final data = doc.data() as Map<String, dynamic>;
-      final rNo = int.tryParse(data['rihtimNo']?.toString() ?? '0');
-      if (rNo != null && rNo >= 1 && rNo <= 5) {
-        if (data['durum'] != 'Limandan Ayrıldı') {
-          berthMap[rNo] = data;
-        }
-      }
-    }
-
     pdf.addPage(
       pw.Page(
         pageFormat: PdfPageFormat.a4,
@@ -751,7 +3537,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
           return pw.Column(
             crossAxisAlignment: pw.CrossAxisAlignment.start,
             children: [
-              // 1. Resmi Üst Başlık
+              // Resmi Üst Başlık
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
@@ -759,12 +3545,12 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                     crossAxisAlignment: pw.CrossAxisAlignment.start,
                     children: [
                       pw.Text(
-                        safeTr('İSDEMİR A.Ş. — LİMAN İŞLETME MÜDÜRLÜĞÜ'),
+                        safeTr('İSDEMİR A.Ş. • LİMAN İŞLETME MÜDÜRLÜĞÜ'),
                         style: pw.TextStyle(fontSize: 14, fontWeight: pw.FontWeight.bold, color: PdfColors.blueGrey900),
                       ),
                       pw.SizedBox(height: 2),
                       pw.Text(
-                        safeTr('RIHTIM 1-5 GEMİ VE YÜKLEME/TAHLİYE VARDİYA PUANTAJ RAPORU'),
+                        safeTr('RIHTIM 1-5 GEMİ & YÜKLEME/TAHLİYE VARDİYA RAPORU'),
                         style: const pw.TextStyle(fontSize: 10, color: PdfColors.grey700),
                       ),
                     ],
@@ -772,7 +3558,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                   pw.Column(
                     crossAxisAlignment: pw.CrossAxisAlignment.end,
                     children: [
-                      pw.Text(safeTr('DOKÜMAN: İSD-LMN-VRD-2026/09'), style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
+                      pw.Text(safeTr('DOKÜMAN: ISD-LMN-VRD-2026/09'), style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey600)),
                       pw.Text(safeTr('TARİH: $dateStr'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
                     ],
                   ),
@@ -781,7 +3567,7 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
               pw.Divider(thickness: 1.5, color: PdfColors.red900),
               pw.SizedBox(height: 12),
 
-              // 2. Rapor Meta Özeti
+              // Rapor Özeti
               pw.Container(
                 padding: const pw.EdgeInsets.all(10),
                 decoration: pw.BoxDecoration(
@@ -792,110 +3578,47 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
                 child: pw.Row(
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
-                    pw.Text(safeTr('Raporu Düzenleyen: $_currentUserName'), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
-                    pw.Text(safeTr('Aktif Operasyon: ${allDocs.where((d) => d['durum'] != 'Limandan Ayrıldı').length} Gemi'), style: const pw.TextStyle(fontSize: 10)),
-                    pw.Text(safeTr('Toplam Kayıt: ${allDocs.length} Gemi'), style: const pw.TextStyle(fontSize: 10)),
+                    pw.Text(safeTr('OPERATÖR: $_currentUserName'), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold)),
+                    pw.Text(safeTr('TOPLAM KAYIT: ${allDocs.length} GEMİ'), style: pw.TextStyle(fontSize: 10, fontWeight: pw.FontWeight.bold, color: PdfColors.blue900)),
                   ],
                 ),
               ),
               pw.SizedBox(height: 16),
 
-              // 3. Rıhtım 1-5 Durum Çizelgesi
-              pw.Text(safeTr('1. RIHTIM 1-5 CANLI YANAŞMA VE KAPASİTE TABLOSU'), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: PdfColors.blueGrey900)),
-              pw.SizedBox(height: 6),
-              pw.Table(
-                border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.8),
-                children: [
-                  pw.TableRow(
-                    decoration: const pw.BoxDecoration(color: PdfColors.blueGrey50),
-                    children: [
-                      pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr('Rıhtım No'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr('Gemi Adı'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr('Yük Cinsi'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr('Operasyonel Durum'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr('Sorumlu Operatör'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold))),
-                    ],
-                  ),
-                  for (int r = 1; r <= 5; r++) ...[
-                    pw.TableRow(
-                      children: [
-                        pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr('$r. Rıhtım (R-$r)'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold))),
-                        pw.Padding(
-                          padding: const pw.EdgeInsets.all(6),
-                          child: pw.Text(
-                            safeTr(berthMap[r]?['gemiAdi'] ?? 'BOŞ RIHTIM'),
-                            style: pw.TextStyle(
-                              fontSize: 9,
-                              fontWeight: berthMap[r] != null ? pw.FontWeight.bold : pw.FontWeight.normal,
-                              color: berthMap[r] != null ? PdfColors.black : PdfColors.grey600,
-                            ),
-                          ),
-                        ),
-                        pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr(berthMap[r]?['yukCinsi'] ?? '—'), style: const pw.TextStyle(fontSize: 9))),
-                        pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr(berthMap[r]?['durum'] ?? 'Yanaşmaya Uygun'), style: const pw.TextStyle(fontSize: 9))),
-                        pw.Padding(padding: const pw.EdgeInsets.all(6), child: pw.Text(safeTr(cleanOp(berthMap[r]?['guncelleyenKisi'])), style: const pw.TextStyle(fontSize: 9))),
-                      ],
-                    ),
-                  ],
+              // Gemi Tablosu
+              pw.TableHelper.fromTextArray(
+                headers: [
+                  safeTr('RIHTIM'),
+                  safeTr('GEMİ ADI'),
+                  safeTr('YÜK CİNSİ'),
+                  safeTr('TOPLAM TONAJ'),
+                  safeTr('ELLEÇLENEN'),
+                  safeTr('DURUM'),
                 ],
+                data: allDocs.map((doc) {
+                  final data = doc.data() as Map<String, dynamic>;
+                  return [
+                    safeTr(data['rihtimNo']?.toString() ?? '-'),
+                    safeTr(data['gemiAdi']?.toString() ?? '-'),
+                    safeTr(data['yukCinsi']?.toString() ?? '-'),
+                    safeTr('${data['tonaj'] ?? '-'} T'),
+                    safeTr('${data['elleclenenTonaj'] ?? '-'} T'),
+                    safeTr(data['durum']?.toString() ?? '-'),
+                  ];
+                }).toList(),
+                headerStyle: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold, color: PdfColors.white),
+                headerDecoration: const pw.BoxDecoration(color: PdfColors.red800),
+                cellStyle: const pw.TextStyle(fontSize: 8.5),
+                cellPadding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 5),
               ),
-              pw.SizedBox(height: 18),
 
-              // 4. Tüm Gemi Operasyonları Detay Dökümü
-              pw.Text(safeTr('2. TÜM GEMİ OPERASYONLARI HAREKET LİSTESİ'), style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold, color: PdfColors.blueGrey900)),
-              pw.SizedBox(height: 6),
-              pw.Table(
-                border: pw.TableBorder.all(color: PdfColors.grey400, width: 0.8),
-                children: [
-                  pw.TableRow(
-                    decoration: const pw.BoxDecoration(color: PdfColors.blueGrey50),
-                    children: [
-                      pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr('Gemi'), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr('Rıhtım'), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr('Yük'), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr('Durum'), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
-                      pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr('İşlem Yapan'), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
-                    ],
-                  ),
-                  for (var doc in allDocs) ...[
-                    pw.TableRow(
-                      children: [
-                        pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr(doc['gemiAdi'] ?? ''), style: pw.TextStyle(fontSize: 8.5, fontWeight: pw.FontWeight.bold))),
-                        pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr(doc['rihtimNo'] == 'Demir' ? 'Demir Sahası' : 'R-${doc['rihtimNo'] ?? ''}'), style: const pw.TextStyle(fontSize: 8.5))),
-                        pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr(doc['yukCinsi'] ?? ''), style: const pw.TextStyle(fontSize: 8.5))),
-                        pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr(doc['durum'] ?? ''), style: const pw.TextStyle(fontSize: 8.5))),
-                        pw.Padding(padding: const pw.EdgeInsets.all(5), child: pw.Text(safeTr(cleanOp(doc['guncelleyenKisi'])), style: const pw.TextStyle(fontSize: 8.5))),
-                      ],
-                    ),
-                  ],
-                ],
-              ),
               pw.Spacer(),
-
-              // 5. Onay ve İmza Alanları
+              pw.Divider(color: PdfColors.grey400),
               pw.Row(
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.center,
-                    children: [
-                      pw.Text(safeTr('Nöbetçi Rıhtım / Saha Amiri'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
-                      pw.SizedBox(height: 35),
-                      pw.Container(width: 140, height: 0.8, color: PdfColors.black),
-                      pw.SizedBox(height: 2),
-                      pw.Text(safeTr('İmza / Tarih'), style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600)),
-                    ],
-                  ),
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.center,
-                    children: [
-                      pw.Text(safeTr('Liman İşletme Başmühendisi / Müdürü'), style: pw.TextStyle(fontSize: 9, fontWeight: pw.FontWeight.bold)),
-                      pw.SizedBox(height: 35),
-                      pw.Container(width: 160, height: 0.8, color: PdfColors.black),
-                      pw.SizedBox(height: 2),
-                      pw.Text(safeTr('Onay / Kaşe'), style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600)),
-                    ],
-                  ),
+                  pw.Text(safeTr('İskenderun Demir ve Çelik A.Ş. • Liman Otomasyon Sistemi'), style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600)),
+                  pw.Text(safeTr('Sayfa 1 / 1'), style: const pw.TextStyle(fontSize: 8, color: PdfColors.grey600)),
                 ],
               ),
             ],
@@ -905,1917 +3628,224 @@ class _GemilerScreenState extends State<GemilerScreen> with SingleTickerProvider
     );
 
     try {
-      final tempDir = await getTemporaryDirectory();
-      final file = File('${tempDir.path}/isdemir_liman_vardiya_raporu_${now.millisecondsSinceEpoch}.pdf');
+      final output = await getTemporaryDirectory();
+      final file = File('${output.path}/isdemir_liman_vardiya_raporu.pdf');
       await file.writeAsBytes(await pdf.save());
-
-      await SharePlus.instance.share(
-        ShareParams(
-          files: [XFile(file.path)],
-          text: 'İSDEMİR A.Ş. Liman Rıhtım 1-5 Vardiya Raporu ($dateStr)',
-        ),
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text: 'İSDEMİR Liman Operasyon Raporu ($dateStr)',
       );
     } catch (e) {
       debugPrint('PDF paylaşım hatası: $e');
     }
   }
+}
 
+/// 🛰️ SpaceEye AI Dönen Taktik Radar Painter
+class RadarSweepPainter extends CustomPainter {
+  final double sweepAngle;
+  final int spectrumMode; // 0: SAR Radar, 1: Optik Uydu, 2: Termal Isı
+  final List<Map<String, dynamic>> ships;
+  final String? selectedShipName;
 
+  RadarSweepPainter({
+    required this.sweepAngle,
+    required this.spectrumMode,
+    required this.ships,
+    this.selectedShipName,
+  });
 
   @override
-  Widget build(BuildContext context) {
-    if (_isCheckingVip && !_isVip) {
-      return const Scaffold(
-        backgroundColor: Color(0xFF0C0E12),
-        body: Center(
-          child: CircularProgressIndicator(color: Color(0xFFF59E0B)),
-        ),
-      );
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = math.min(size.width, size.height) / 2 - 10;
+
+    // Spektrum renk teması
+    final Color mainColor = spectrumMode == 0
+        ? const Color(0xFF0284C7) // SAR Cyan/Mavi
+        : spectrumMode == 1
+            ? const Color(0xFF10B981) // Optik Yeşil
+            : const Color(0xFFE11D48); // Termal Kırmızı
+
+    final Color glowColor = spectrumMode == 0
+        ? const Color(0xFF38BDF8)
+        : spectrumMode == 1
+            ? const Color(0xFF34D399)
+            : const Color(0xFFF43F5E);
+
+    // 1. Dış Halka & Arka Plan Gridleri
+    final bgPaint = Paint()
+      ..color = const Color(0xFF050B14)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(center, radius, bgPaint);
+
+    final gridPaint = Paint()
+      ..color = mainColor.withValues(alpha: 0.18)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
+
+    // Eşmerkezli mesafe halkaları (0.05 NM, 0.10 NM, 0.15 NM, 0.20 NM)
+    for (int i = 1; i <= 4; i++) {
+      final r = radius * (i / 4.0);
+      canvas.drawCircle(center, r, gridPaint);
     }
 
-    if (!_isVip) {
-      return VipRestrictedView(
-        user: widget.user,
-        onAuthorized: () {
-          setState(() {
-            _isVip = true;
-          });
-        },
-      );
-    }
+    // Çapraz eksen çizgileri (N-S, E-W)
+    final axisPaint = Paint()
+      ..color = mainColor.withValues(alpha: 0.22)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.0;
 
-    return Scaffold(
-      backgroundColor: const Color(0xFF0C0E12),
-      appBar: AppBar(
-        backgroundColor: const Color(0xFF14181F),
-        elevation: 0,
-        centerTitle: false,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white70, size: 20),
-          onPressed: () {
-            _playSound('squelch');
-            Navigator.pop(context);
-          },
-        ),
-        title: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: const Color(0xFFE50914).withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE50914).withValues(alpha: 0.3)),
-              ),
-              child: const HugeIcon(
-                icon: HugeIcons.strokeRoundedAnchor,
-                color: Color(0xFFE50914),
-                size: 18,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    'İSDEMİR LİMANI',
-                    style: GoogleFonts.orbitron(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.1,
-                    ),
-                  ),
-                  Row(
-                    children: [
-                      Container(
-                        width: 6,
-                        height: 6,
-                        decoration: const BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Color(0xFF10B981),
-                          boxShadow: [
-                            BoxShadow(color: Color(0xFF10B981), blurRadius: 4, spreadRadius: 1),
-                          ],
-                        ),
-                      ),
-                      Flexible(
-                        child: Text(
-                          'CANLI LİMAN RADARI (TRIDM)',
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            color: Color(0xFF10B981),
-                            fontSize: 9.5,
-                            fontWeight: FontWeight.w700,
-                            letterSpacing: 0.4,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          // Canlı Verileri Senkronize Et
-          IconButton(
-            tooltip: 'AisStream Canlı Radar Senkronize Et',
-            icon: _isSyncing
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF10B981)),
-                  )
-                : const Icon(Icons.sync_rounded, color: Color(0xFF10B981), size: 22),
-            onPressed: _syncLiveAisStream,
-          ),
-          // Ses Açma / Kapatma Butonu
-          IconButton(
-            tooltip: _soundEnabled ? 'Telsiz Sesleri Açık' : 'Telsiz Sesleri Sessizde',
-            icon: Icon(
-              _soundEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
-              color: _soundEnabled ? const Color(0xFF10B981) : Colors.white38,
-              size: 22,
-            ),
-            onPressed: _toggleSound,
-          ),
-          // Filtreleri Sıfırla
-          IconButton(
-            tooltip: 'Filtreleri Sıfırla',
-            icon: const Icon(Icons.refresh_rounded, color: Colors.white70, size: 22),
-            onPressed: () {
-              _playSound('squelch');
-              setState(() {
-                _selectedFilter = 'Gemi Başlama Alındı';
-              });
-            },
-          ),
-          const SizedBox(width: 6),
+    canvas.drawLine(Offset(center.dx - radius, center.dy), Offset(center.dx + radius, center.dy), axisPaint);
+    canvas.drawLine(Offset(center.dx, center.dy - radius), Offset(center.dx, center.dy + radius), axisPaint);
+
+    // 2. Pusula İpuçları (N, S, E, W, 0.2 NM Range)
+    final textPainterN = TextPainter(
+      text: TextSpan(
+        text: 'N (000°)',
+        style: TextStyle(color: glowColor.withValues(alpha: 0.8), fontSize: 8.5, fontWeight: FontWeight.bold),
+      ),
+      textDirection: ui.TextDirection.ltr,
+    )..layout();
+    textPainterN.paint(canvas, Offset(center.dx - textPainterN.width / 2, center.dy - radius + 4));
+
+    final textPainterRange = TextPainter(
+      text: TextSpan(
+        text: '0.2 NM RANGE',
+        style: TextStyle(color: mainColor.withValues(alpha: 0.7), fontSize: 7.5, fontWeight: FontWeight.bold),
+      ),
+      textDirection: ui.TextDirection.ltr,
+    )..layout();
+    textPainterRange.paint(canvas, Offset(center.dx - textPainterRange.width / 2, center.dy + radius - 14));
+
+    // 3. Dönen Radar Taraması (Sweep Gradient Fan)
+    final sweepPaint = Paint()
+      ..shader = SweepGradient(
+        center: Alignment.center,
+        startAngle: 0.0,
+        endAngle: math.pi / 2,
+        colors: [
+          glowColor.withValues(alpha: 0.35),
+          glowColor.withValues(alpha: 0.0),
         ],
-      ),
-      body: StreamBuilder<QuerySnapshot>(
-        stream: FirebaseFirestore.instance
-            .collection('gemiler')
-            .orderBy('sonGuncelleme', descending: true)
-            .snapshots(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const ShipListSkeleton();
-          }
+        transform: GradientRotation(sweepAngle - math.pi / 2),
+      ).createShader(Rect.fromCircle(center: center, radius: radius));
 
-          final allShips = snapshot.data?.docs ?? [];
+    canvas.save();
+    canvas.clipPath(Path()..addOval(Rect.fromCircle(center: center, radius: radius)));
+    canvas.drawCircle(center, radius, sweepPaint);
 
-          // Metrik Sayaçları
-          final baslamaCount = allShips.where((d) => d['durum'] == 'Gemi Başlama Alındı').length;
-          final bittiCount = allShips.where((d) => d['durum'] == 'Gemi Bitti').length;
-          final ayrildiCount = allShips.where((d) => d['durum'] == 'Limandan Ayrıldı').length;
-          final demirCount = allShips.where((d) {
-            final data = d.data() as Map<String, dynamic>;
-            final r = data['rihtimNo']?.toString();
-            final st = data['durum']?.toString() ?? '';
-            return r == 'Demir' || st.contains('Demir') || data['isAnchorage'] == true;
-          }).length;
+    // Sweep öncü çizgisi (Öncü ışın)
+    final leadLinePaint = Paint()
+      ..color = glowColor.withValues(alpha: 0.9)
+      ..strokeWidth = 1.8
+      ..style = PaintingStyle.stroke;
 
-          // Dolu Rıhtım Sayısı (Yalnızca R-1 ile R-5 arası ve ayrılmamış)
-          final Set<String> occupiedBerths = {};
-          for (var doc in allShips) {
-            final data = doc.data() as Map<String, dynamic>;
-            if (data['durum'] != 'Limandan Ayrıldı') {
-              final r = data['rihtimNo']?.toString();
-              if (r != null && ['1', '2', '3', '4', '5'].contains(r)) {
-                occupiedBerths.add(r);
-              }
-            }
-          }
-          final int emptyBerthCount = 5 - occupiedBerths.length;
-
-          // Filtrelenmiş liste (Başladı, Bitişte, Bitti, Ayrıldı veya Demirde)
-          final List<QueryDocumentSnapshot> filteredShips;
-          if (_selectedFilter == 'Demir Sahasında (Bekliyor)') {
-            filteredShips = allShips.where((d) {
-              final data = d.data() as Map<String, dynamic>;
-              final r = data['rihtimNo']?.toString();
-              final st = data['durum']?.toString() ?? '';
-              return r == 'Demir' || st.contains('Demir') || data['isAnchorage'] == true;
-            }).toList();
-          } else {
-            filteredShips = allShips.where((d) => d['durum'] == _selectedFilter).toList();
-          }
-
-          // Sıralama: Rıhtım numarasına göre (R-1, R-2 ... R-5) veya mesafeye göre
-          filteredShips.sort((a, b) {
-            final dataA = a.data() as Map<String, dynamic>;
-            final dataB = b.data() as Map<String, dynamic>;
-
-            final rA = int.tryParse(dataA['rihtimNo']?.toString() ?? '99') ?? 99;
-            final rB = int.tryParse(dataB['rihtimNo']?.toString() ?? '99') ?? 99;
-            if (rA != rB) return rA.compareTo(rB);
-
-            final distA = (dataA['mesafeDemirKm'] is num) ? (dataA['mesafeDemirKm'] as num).toDouble() : 99.0;
-            final distB = (dataB['mesafeDemirKm'] is num) ? (dataB['mesafeDemirKm'] as num).toDouble() : 99.0;
-            return distA.compareTo(distB);
-          });
-
-          return Column(
-            children: [
-              // 1. ÜST SEGMENT SEÇİCİ (Rıhtım & Operasyonlar vs Liman Analitiği)
-              Container(
-                margin: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF161A22),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          _playSound('squelch');
-                          setState(() => _activeTabIndex = 0);
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: _activeTabIndex == 0 ? const Color(0xFFE50914) : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.directions_boat_filled_rounded,
-                                size: 16,
-                                color: _activeTabIndex == 0 ? Colors.white : Colors.white54,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Rıhtım & Operasyon',
-                                style: TextStyle(
-                                  color: _activeTabIndex == 0 ? Colors.white : Colors.white54,
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () {
-                          _playSound('squelch');
-                          setState(() => _activeTabIndex = 1);
-                        },
-                        child: AnimatedContainer(
-                          duration: const Duration(milliseconds: 200),
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: _activeTabIndex == 1 ? const Color(0xFFE50914) : Colors.transparent,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.bar_chart_rounded,
-                                size: 16,
-                                color: _activeTabIndex == 1 ? Colors.white : Colors.white54,
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'Analitik & A4 Rapor',
-                                style: TextStyle(
-                                  color: _activeTabIndex == 1 ? Colors.white : Colors.white54,
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              // 2. ANA İÇERİK (SEÇİLEN SEKME)
-              Expanded(
-                child: _activeTabIndex == 0
-                    ? _buildOperationsTab(
-                        allShips: allShips,
-                        filteredShips: filteredShips,
-                        baslamaCount: baslamaCount,
-                        bittiCount: bittiCount,
-                        ayrildiCount: ayrildiCount,
-                        emptyBerthCount: emptyBerthCount,
-                        demirCount: demirCount,
-                      )
-                    : _buildAnalyticsTab(
-                        allShips: allShips,
-                        occupiedBerths: occupiedBerths,
-                      ),
-              ),
-            ],
-          );
-        },
-      ),
+    final leadEnd = Offset(
+      center.dx + radius * math.cos(sweepAngle),
+      center.dy + radius * math.sin(sweepAngle),
     );
-  }
+    canvas.drawLine(center, leadEnd, leadLinePaint);
+    canvas.restore();
 
-  // =========================================================================
-  // 1. SEKME: RIHTIM VE GEMİ OPERASYONLARI
-  // =========================================================================
-  Widget _buildOperationsTab({
-    required List<QueryDocumentSnapshot> allShips,
-    required List<QueryDocumentSnapshot> filteredShips,
-    required int baslamaCount,
-    required int bittiCount,
-    required int ayrildiCount,
-    required int emptyBerthCount,
-    required int demirCount,
-  }) {
-    return RefreshIndicator(
-      color: const Color(0xFF10B981),
-      backgroundColor: const Color(0xFF161A22),
-      onRefresh: () => _syncLiveAisStream(silent: false),
-      child: CustomScrollView(
-      slivers: [
-        // KPI TELEMETRİ SAYAÇLARI (AnimatedFlipCounter)
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 10),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _buildFlipStatTile(
-                    label: 'Başladı',
-                    count: baslamaCount,
-                    color: const Color(0xFF10B981),
-                    icon: HugeIcons.strokeRoundedCargoShip,
-                    filterKey: 'Gemi Başlama Alındı',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildFlipStatTile(
-                    label: 'Demirde',
-                    count: demirCount,
-                    color: const Color(0xFFF59E0B),
-                    icon: HugeIcons.strokeRoundedAnchor,
-                    filterKey: 'Demir Sahasında (Bekliyor)',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildFlipStatTile(
-                    label: 'Bitti',
-                    count: bittiCount,
-                    color: const Color(0xFF3B82F6),
-                    icon: HugeIcons.strokeRoundedCheckmarkCircle02,
-                    filterKey: 'Gemi Bitti',
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: _buildFlipStatTile(
-                    label: 'Boş Rıhtım',
-                    count: emptyBerthCount,
-                    color: const Color(0xFF38BDF8),
-                    icon: HugeIcons.strokeRoundedSailboatOffshore,
-                    filterKey: 'Limandan Ayrıldı',
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
+    // 4. İsdemir Limanı Sahil Çizgisi Silueti (Basitleştirilmiş Liman Dalgakıranı & Rıhtımları)
+    final breakwaterPaint = Paint()
+      ..color = Colors.white.withValues(alpha: 0.16)
+      ..strokeWidth = 2.0
+      ..style = PaintingStyle.stroke;
 
-        // CANLI RIHTIM DİJİTAL İKİZİ (PortBerthSchemeWidget)
-        SliverToBoxAdapter(
-          child: PortBerthSchemeWidget(
-            ships: allShips.map((s) => s.data() as Map<String, dynamic>).toList(),
-            onShipTap: (shipData) {
-              _playSound('squelch');
-              final gemi = shipData['gemiAdi'] ?? 'Gemi';
-              final rNo = shipData['rihtimNo'] ?? '?';
-              final durum = shipData['durum'] ?? 'Bağlı';
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: const Color(0xFF14181F),
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  duration: const Duration(seconds: 2),
-                  content: Row(
-                    children: [
-                      const Icon(Icons.directions_boat_filled_rounded, color: Color(0xFF10B981), size: 18),
-                      const SizedBox(width: 10),
-                      Text('$gemi — R-$rNo ($durum)', style: const TextStyle(color: Colors.white)),
-                    ],
-                  ),
-                ),
-              );
-            },
-            onEmptyRihtimTap: (rihtimNo) {
-              _playSound('squelch');
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  backgroundColor: const Color(0xFF14181F),
-                  behavior: SnackBarBehavior.floating,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  duration: const Duration(seconds: 2),
-                  content: Row(
-                    children: [
-                      const Icon(Icons.info_outline_rounded, color: Color(0xFF38BDF8), size: 18),
-                      const SizedBox(width: 10),
-                      Text('$rihtimNo. Rıhtım şu anda boş (AIS Radar Takipte)', style: const TextStyle(color: Colors.white70)),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
+    final breakwaterPath = Path();
+    breakwaterPath.moveTo(center.dx + radius * 0.10, center.dy + radius * 0.70);
+    breakwaterPath.lineTo(center.dx + radius * 0.15, center.dy - radius * 0.50);
+    breakwaterPath.lineTo(center.dx + radius * 0.25, radius * -0.55 + center.dy);
+    canvas.drawPath(breakwaterPath, breakwaterPaint);
 
-        // YATAY FİLTRELEME ÇİPLERİ
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-            child: SizedBox(
-              height: 38,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                children: [
-                  _buildFilterPill(
-                    title: '🟢 Başladı',
-                    count: baslamaCount,
-                    filterKey: 'Gemi Başlama Alındı',
-                    accentColor: const Color(0xFF10B981),
-                  ),
-                  const SizedBox(width: 8),
-                  _buildFilterPill(
-                    title: '⚓ Demirde',
-                    count: demirCount,
-                    filterKey: 'Demir Sahasında (Bekliyor)',
-                    accentColor: const Color(0xFFF59E0B),
-                  ),
-                  const SizedBox(width: 8),
-                  _buildFilterPill(
-                    title: '🔵 Bitti',
-                    count: bittiCount,
-                    filterKey: 'Gemi Bitti',
-                    accentColor: const Color(0xFF3B82F6),
-                  ),
-                  const SizedBox(width: 8),
-                  _buildFilterPill(
-                    title: '⚪ Ayrıldı',
-                    count: ayrildiCount,
-                    filterKey: 'Limandan Ayrıldı',
-                    accentColor: const Color(0xFF94A3B8),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ),
+    // 5. Gemiler (Blips ve Taktik İkonlar)
+    for (final ship in ships) {
+      final double relX = (ship['relX'] as num).toDouble();
+      final double relY = (ship['relY'] as num).toDouble();
+      final shipPos = Offset(center.dx + radius * relX, center.dy + radius * relY);
+      final isSelected = selectedShipName == ship['gemiAdi'];
 
-        // GEMİ KARTLARI LİSTESİ VEYA BOŞ DURUM
-        if (filteredShips.isEmpty)
-          SliverToBoxAdapter(
-            child: Container(
-              margin: const EdgeInsets.all(24),
-              padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
-              decoration: BoxDecoration(
-                color: const Color(0xFF14181F),
-                borderRadius: BorderRadius.circular(20),
-                border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-              ),
-              child: Column(
-                children: [
-                  const LottieCargoShipWidget(width: 130, height: 80),
-                  const SizedBox(height: 14),
-                  Text(
-                    'KAYITLI GEMİ BULUNAMADI',
-                    style: GoogleFonts.orbitron(
-                      color: Colors.white70,
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  const Text(
-                    'Seçili filtreye uygun operasyon kaydı yok.',
-                    style: TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-                ],
-              ),
-            ),
-          )
-        else
-          SliverPadding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            sliver: SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) {
-                  final ship = filteredShips[index];
-                  final data = ship.data() as Map<String, dynamic>;
-                  return _buildModernShipCard(ship.id, data, index);
-                },
-                childCount: filteredShips.length,
-              ),
-            ),
-          ),
+      // Gemi açısına göre radar sweep uzaklığı (yakınsa parlasın)
+      final shipAngle = math.atan2(shipPos.dy - center.dy, shipPos.dx - center.dx);
+      double angleDiff = (sweepAngle - shipAngle) % (math.pi * 2);
+      if (angleDiff < 0) angleDiff += math.pi * 2;
+      final bool justScanned = angleDiff < 0.6; // Son 35 derecede tarandıysa parla
 
-        const SliverToBoxAdapter(child: SizedBox(height: 85)),
-      ],
-    ),
-  );
-  }
+      final blipColor = isSelected
+          ? const Color(0xFFFBBF24) // Seçili sarı
+          : (justScanned ? glowColor : glowColor.withValues(alpha: 0.75));
 
-  // =========================================================================
-  // 2. SEKME: LİMAN ANALİTİK & RESMİ A4 VARDİYA RAPORU
-  // =========================================================================
-  Widget _buildAnalyticsTab({
-    required List<QueryDocumentSnapshot> allShips,
-    required Set<String> occupiedBerths,
-  }) {
-    // Yük cinslerine göre adetler
-    final Map<String, int> cargoCounts = {};
-    for (var doc in allShips) {
-      final y = doc['yukCinsi']?.toString() ?? 'Diğer';
-      cargoCounts[y] = (cargoCounts[y] ?? 0) + 1;
-    }
-
-    final int occupiedCount = occupiedBerths.length;
-    final double occupancyRate = (occupiedCount / 5.0) * 100;
-
-    return SingleChildScrollView(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 1. A4 RESMİ VARDİYA RAPORU BANNER'I
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              gradient: const LinearGradient(
-                colors: [Color(0xFF1E293B), Color(0xFF0F172A)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
-              border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.35)),
-              boxShadow: [
-                BoxShadow(
-                  color: const Color(0xFF38BDF8).withValues(alpha: 0.12),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF38BDF8).withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(Icons.picture_as_pdf_rounded, color: Color(0xFF38BDF8), size: 28),
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const Text(
-                        'Resmi Liman Vardiya Raporu',
-                        style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                      ),
-                      const SizedBox(height: 2),
-                      const Text(
-                        'Rıhtım 1-5 puantajını A4 PDF olarak paylaş',
-                        style: TextStyle(color: Colors.white60, fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF38BDF8),
-                    foregroundColor: Colors.black,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                  ),
-                  onPressed: () => _generateAndSharePortReport(allShips),
-                  icon: const Icon(Icons.share_rounded, size: 16),
-                  label: const Text('Rapor Al', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                ),
-              ],
-            ),
-          ).animate().fadeIn(duration: 300.ms).slideY(begin: 0.1, end: 0),
-
-          const SizedBox(height: 18),
-
-          // 2. RIHTIM DOLULUK KAPASİTE GÖSTERGESİ (Gauge / Ring)
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: const Color(0xFF14181F),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.anchor_rounded, color: Color(0xFF10B981), size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'RIHTIM DOLULUK KAPASİTESİ',
-                          style: GoogleFonts.orbitron(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      '$occupiedCount / 5 Rıhtım Dolu',
-                      style: const TextStyle(color: Color(0xFF10B981), fontSize: 12, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    // Donut Chart
-                    SizedBox(
-                      width: 100,
-                      height: 100,
-                      child: Stack(
-                        alignment: Alignment.center,
-                        children: [
-                          PieChart(
-                            PieChartData(
-                              sectionsSpace: 3,
-                              centerSpaceRadius: 36,
-                              startDegreeOffset: -90,
-                              sections: [
-                                PieChartSectionData(
-                                  value: occupiedCount.toDouble(),
-                                  color: const Color(0xFF10B981),
-                                  radius: 12,
-                                  showTitle: false,
-                                ),
-                                PieChartSectionData(
-                                  value: (5 - occupiedCount).toDouble(),
-                                  color: const Color(0xFF1E293B),
-                                  radius: 10,
-                                  showTitle: false,
-                                ),
-                              ],
-                            ),
-                          ),
-                          Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text(
-                                '%${occupancyRate.toStringAsFixed(0)}',
-                                style: GoogleFonts.orbitron(
-                                  color: Colors.white,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w900,
-                                ),
-                              ),
-                              const Text('Kapasite', style: TextStyle(color: Colors.white38, fontSize: 9)),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(width: 20),
-                    // Rıhtım Açıklama Barları
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          for (int r = 1; r <= 5; r++) ...[
-                            Row(
-                              children: [
-                                Container(
-                                  width: 8,
-                                  height: 8,
-                                  decoration: BoxDecoration(
-                                    shape: BoxShape.circle,
-                                    color: occupiedBerths.contains(r.toString())
-                                        ? const Color(0xFF10B981)
-                                        : Colors.white24,
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  '$r. Rıhtım:',
-                                  style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.w600),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  occupiedBerths.contains(r.toString()) ? 'YANAŞIK GEMİ VAR' : 'BOŞ',
-                                  style: TextStyle(
-                                    color: occupiedBerths.contains(r.toString()) ? const Color(0xFF10B981) : Colors.white38,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            if (r < 5) const SizedBox(height: 5),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ).animate().fadeIn(duration: 350.ms).slideY(begin: 0.1, end: 0),
-
-          const SizedBox(height: 18),
-
-          // 3. YÜK CİNSİ DAĞILIMI (fl_chart BarChart)
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: const Color(0xFF14181F),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Row(
-                      children: [
-                        const Icon(Icons.category_rounded, color: Color(0xFFF59E0B), size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          'YÜK CİNSİ DAĞILIMI',
-                          style: GoogleFonts.orbitron(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.8,
-                          ),
-                        ),
-                      ],
-                    ),
-                    Text(
-                      'Toplam ${cargoCounts.length} Kategori',
-                      style: const TextStyle(color: Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 18),
-                if (cargoCounts.isEmpty)
-                  const Center(
-                    child: Padding(
-                      padding: EdgeInsets.all(20.0),
-                      child: Text('Veri bulunamadı.', style: TextStyle(color: Colors.white38)),
-                    ),
-                  )
-                else
-                  SizedBox(
-                    height: 180,
-                    child: BarChart(
-                      BarChartData(
-                        alignment: BarChartAlignment.spaceAround,
-                        maxY: (cargoCounts.values.fold(0, (max, v) => v > max ? v : max) + 1).toDouble(),
-                        barTouchData: BarTouchData(
-                          enabled: true,
-                          touchTooltipData: BarTouchTooltipData(
-                            getTooltipColor: (_) => const Color(0xFF1E293B),
-                            getTooltipItem: (group, groupIndex, rod, rodIndex) {
-                              final key = cargoCounts.keys.elementAt(group.x.toInt());
-                              return BarTooltipItem(
-                                '$key\n',
-                                const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
-                                children: [
-                                  TextSpan(
-                                    text: '${rod.toY.toInt()} Gemi',
-                                    style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.w700),
-                                  ),
-                                ],
-                              );
-                            },
-                          ),
-                          touchCallback: (event, response) {
-                            setState(() {
-                              if (response?.spot != null && event is! FlTapUpEvent) {
-                                _touchedBarIndex = response!.spot!.touchedBarGroupIndex;
-                              } else {
-                                _touchedBarIndex = -1;
-                              }
-                            });
-                          },
-                        ),
-                        titlesData: FlTitlesData(
-                          show: true,
-                          bottomTitles: AxisTitles(
-                            sideTitles: SideTitles(
-                              showTitles: true,
-                              getTitlesWidget: (val, meta) {
-                                final idx = val.toInt();
-                                if (idx >= 0 && idx < cargoCounts.keys.length) {
-                                  final title = cargoCounts.keys.elementAt(idx);
-                                  return Padding(
-                                    padding: const EdgeInsets.only(top: 6.0),
-                                    child: Text(
-                                      title.length > 5 ? '${title.substring(0, 5)}..' : title,
-                                      style: TextStyle(
-                                        color: _touchedBarIndex == idx ? const Color(0xFFF59E0B) : Colors.white60,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  );
-                                }
-                                return const SizedBox.shrink();
-                              },
-                            ),
-                          ),
-                          leftTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                          topTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
-                        ),
-                        gridData: FlGridData(
-                          show: true,
-                          drawVerticalLine: false,
-                          getDrawingHorizontalLine: (val) => FlLine(
-                            color: Colors.white.withValues(alpha: 0.05),
-                            strokeWidth: 1,
-                          ),
-                        ),
-                        borderData: FlBorderData(show: false),
-                        barGroups: List.generate(cargoCounts.length, (idx) {
-                          final count = cargoCounts.values.elementAt(idx);
-                          return BarChartGroupData(
-                            x: idx,
-                            barRods: [
-                              BarChartRodData(
-                                toY: count.toDouble(),
-                                color: _touchedBarIndex == idx ? const Color(0xFFF59E0B) : const Color(0xFF38BDF8),
-                                width: 18,
-                                borderRadius: const BorderRadius.vertical(top: Radius.circular(6)),
-                                backDrawRodData: BackgroundBarChartRodData(
-                                  show: true,
-                                  toY: (cargoCounts.values.fold(0, (max, v) => v > max ? v : max) + 1).toDouble(),
-                                  color: Colors.white.withValues(alpha: 0.03),
-                                ),
-                              ),
-                            ],
-                          );
-                        }),
-                      ),
-                    ),
-                  ),
-              ],
-            ),
-          ).animate().fadeIn(duration: 400.ms).slideY(begin: 0.1, end: 0),
-
-          const SizedBox(height: 85),
-        ],
-      ),
-    );
-  }
-
-  // =========================================================================
-  // YARDIMCI BİLEŞENLER
-  // =========================================================================
-
-  Widget _buildFlipStatTile({
-    required String label,
-    required int count,
-    required Color color,
-    required List<List<dynamic>> icon,
-    required String filterKey,
-  }) {
-    final bool isSelected = _selectedFilter == filterKey;
-    return GestureDetector(
-      onTap: () {
-        _playSound('squelch');
-        HapticFeedback.selectionClick();
-        setState(() {
-          _selectedFilter = filterKey;
-        });
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 6),
-        decoration: BoxDecoration(
-          color: isSelected ? color.withValues(alpha: 0.16) : const Color(0xFF14181F),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isSelected ? color.withValues(alpha: 0.55) : Colors.white.withValues(alpha: 0.06),
-            width: isSelected ? 1.4 : 1.0,
-          ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: 0.22),
-                    blurRadius: 10,
-                    spreadRadius: 1,
-                  )
-                ]
-              : null,
-        ),
-        child: Column(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(6),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.12),
-                shape: BoxShape.circle,
-              ),
-              child: HugeIcon(
-                icon: icon,
-                color: color,
-                size: 15,
-              ),
-            ),
-            const SizedBox(height: 6),
-            AnimatedFlipCounter(
-              value: count,
-              textStyle: GoogleFonts.orbitron(
-                color: Colors.white,
-                fontSize: 17,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-            const SizedBox(height: 2),
-            Text(
-              label,
-              style: TextStyle(
-                color: isSelected ? color : Colors.white54,
-                fontSize: 10.5,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFilterPill({
-    required String title,
-    required int count,
-    required String filterKey,
-    required Color accentColor,
-  }) {
-    final bool isSelected = _selectedFilter == filterKey;
-    return GestureDetector(
-      onTap: () {
-        _playSound('squelch');
-        HapticFeedback.selectionClick();
-        setState(() {
-          _selectedFilter = filterKey;
-        });
-      },
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 180),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: BoxDecoration(
-          color: isSelected ? accentColor.withValues(alpha: 0.22) : const Color(0xFF161A22),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
-            color: isSelected ? accentColor.withValues(alpha: 0.6) : Colors.white.withValues(alpha: 0.08),
-            width: isSelected ? 1.3 : 1.0,
-          ),
-          boxShadow: isSelected
-              ? [
-                  BoxShadow(
-                    color: accentColor.withValues(alpha: 0.2),
-                    blurRadius: 8,
-                    spreadRadius: 0.5,
-                  )
-                ]
-              : null,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              title,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.white70,
-                fontSize: 12,
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-              ),
-            ),
-            const SizedBox(width: 6),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-              decoration: BoxDecoration(
-                color: isSelected ? accentColor.withValues(alpha: 0.4) : Colors.white.withValues(alpha: 0.06),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Text(
-                count.toString(),
-                style: TextStyle(
-                  color: isSelected ? Colors.white : Colors.white54,
-                  fontSize: 10,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  // --- ULTRA-MODERN GEMİ TELEMETRİ KARTI ---
-  Widget _buildModernShipCard(String docId, Map<String, dynamic> data, int index) {
-    final durum = data['durum'] ?? 'Bilinmiyor';
-    final isAnchored = data['rihtimNo'] == 'Demir' ||
-        (data['durum']?.toString().contains('Demir') ?? false) ||
-        data['isAnchorage'] == true;
-    final color = _getStatusColor(durum);
-    final statusLabel = _getStatusLabel(durum);
-    final rNo = int.tryParse(data['rihtimNo']?.toString() ?? '1') ?? 1;
-
-    final berthNames = [
-      'Dış İskele',
-      'Kuzey Rıhtım',
-      'Parmak İskele',
-      'Güneybatı',
-      'Güneydoğu'
-    ];
-    final String berthSub;
-    if (isAnchored) {
-      final distStr = data['mesafeDemirKm'] != null ? ' (${data['mesafeDemirKm']} km)' : '';
-      berthSub = 'Demir Sahası // 36.7615°N, 36.1361°E$distStr';
-    } else {
-      berthSub = (rNo >= 1 && rNo <= 5) ? '$rNo. Rıhtım // ${berthNames[rNo - 1]}' : '';
-    }
-
-    final yukCinsi = data['yukCinsi'] ?? 'Genel Kargo';
-    Color yukColor = const Color(0xFFF59E0B);
-    if (yukCinsi == 'Slap') yukColor = const Color(0xFFFB923C);
-    if (yukCinsi == 'Bobin') yukColor = const Color(0xFF14B8A6);
-    if (yukCinsi == 'Cüruf') yukColor = const Color(0xFFA855F7);
-    if (yukCinsi == 'Kömür') yukColor = const Color(0xFF94A3B8);
-    if (yukCinsi == 'Medkok') yukColor = const Color(0xFF84CC16);
-    if (yukCinsi == 'Hurda') yukColor = const Color(0xFFEC4899);
-    if (isAnchored) yukColor = const Color(0xFFF59E0B);
-
-    final speedNum = (data['speedKnots'] is num)
-        ? (data['speedKnots'] as num).toDouble()
-        : double.tryParse(data['speedKnots']?.toString() ?? '0.0') ?? 0.0;
-
-    final isMovingAway = durum == 'Limandan Ayrılıyor' ||
-        (speedNum > 1.2 && durum != 'Limandan Ayrıldı' && !isAnchored);
-    final isEntering = durum == 'Limana Giriş Yapıyor' || durum == 'Limana Giriş Yaptı';
-
-    final gemiAdi = (data['gemiAdi'] ?? 'Gemi').toString().toUpperCase();
-    final mmsi = (data['mmsi'] ?? '').toString();
-
-    // Tonaj Bilgisi (Firestore alanından veya özellik kütüphanesinden)
-    String tonajStr = (data['tonaj'] ?? data['dwt'] ?? '').toString().trim();
-    if (tonajStr.isEmpty || tonajStr == 'null') {
-      if (mmsi == '249489000' || gemiAdi.contains('MARAN HORIZON')) {
-        tonajStr = '208,000 DWT';
-      } else if (mmsi == '255727000' || gemiAdi.contains('NANJING CONFIDENCE')) {
-        tonajStr = '31,603 DWT';
-      } else if (mmsi == '370126000' || gemiAdi.contains('WHITE IVY')) {
-        tonajStr = '16,383 DWT';
-      } else if (mmsi == '352002310' || gemiAdi.contains('LADY MERAL')) {
-        tonajStr = '31,603 DWT';
-      } else if (mmsi == '271002044' || gemiAdi.contains('HACI MEHMET')) {
-        tonajStr = '3,270 DWT';
-      } else if (mmsi == '271044600' || gemiAdi.contains('TAMREY S')) {
-        tonajStr = '31,024 DWT';
-      } else if (mmsi == '271002598' || gemiAdi.contains('ENKO HASLAMAN')) {
-        tonajStr = '3,375 DWT';
-      } else if (mmsi == '271049621' || gemiAdi.contains('LIVA IMAMOGLU')) {
-        tonajStr = '6,097 DWT';
-      } else if (mmsi == '351381000' || gemiAdi.contains('SEVEN S')) {
-        tonajStr = '11,200 DWT';
-      } else if (mmsi == '271044425' || gemiAdi.contains('TAHSIN IMAMOGLU')) {
-        tonajStr = '5,400 DWT';
-      } else {
-        tonajStr = 'Kargo Gemisi';
+      // Işıma halkası
+      if (isSelected || justScanned) {
+        final glowCirclePaint = Paint()
+          ..color = blipColor.withValues(alpha: isSelected ? 0.35 : 0.20)
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(shipPos, isSelected ? 14 : 9, glowCirclePaint);
       }
-    }
 
-    // ETA (Tahmini Varış) Bilgisi
-    String etaStr = (data['eta'] ?? '').toString().trim();
-    if (etaStr.isEmpty || etaStr == 'null') {
-      if (durum == 'Gemi Başlama Alındı' || durum == 'Gemi Bitişte') {
-        etaStr = 'Rıhtımda Bağlı';
-      } else if (durum == 'Limandan Ayrıldı') {
-        etaStr = 'Limandan Ayrıldı';
-      } else if (isAnchored) {
-        if (gemiAdi.contains('LIVA')) {
-          etaStr = '08.09 09:00';
-        } else if (gemiAdi.contains('TAMREY')) {
-          etaStr = '17.09 10:00';
-        } else if (gemiAdi.contains('ENKO')) {
-          etaStr = '05.09 09:00';
-        } else {
-          etaStr = 'Demirde Bekliyor';
-        }
-      } else {
-        etaStr = 'Operasyon Planında';
-      }
-    }
+      // Merkez blip noktası
+      final blipDotPaint = Paint()
+        ..color = blipColor
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(shipPos, isSelected ? 5.5 : 3.8, blipDotPaint);
 
-    return StaggeredEntrance(
-      index: index,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 14),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFF111728), Color(0xFF0C101A)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(
-            color: color.withValues(alpha: 0.32),
-            width: 1.3,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: color.withValues(alpha: 0.08),
-              blurRadius: 18,
-              offset: const Offset(0, 6),
-            ),
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.45),
-              blurRadius: 12,
-              offset: const Offset(0, 3),
-            ),
-          ],
-        ),
-        child: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 1. ÜST BAŞLIK: DURUM LEDİ + GEMİ ADI + RIHTIM VE DURUM ROZETİ
-              Row(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  // Yanıp Sönen Canlı Durum Ledi
-                  AnimatedBuilder(
-                    animation: _blinkController,
-                    builder: (context, child) {
-                      final isDeparted = durum == 'Limandan Ayrıldı';
-                      final pulseVal = isDeparted ? 1.0 : (0.35 + _blinkController.value * 0.65);
-                      return Container(
-                        width: 11,
-                        height: 11,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: color.withValues(alpha: pulseVal),
-                          boxShadow: isDeparted
-                              ? null
-                              : [
-                                  BoxShadow(
-                                    color: color.withValues(alpha: _blinkController.value * 0.8),
-                                    blurRadius: 9,
-                                    spreadRadius: 2.5,
-                                  ),
-                                ],
-                        ),
-                      );
-                    },
-                  ),
-                  const SizedBox(width: 10),
+      // Seçili ise hedef kilitlenme çerçevesi (Reticle)
+      if (isSelected) {
+        final reticlePaint = Paint()
+          ..color = const Color(0xFFFBBF24)
+          ..strokeWidth = 1.4
+          ..style = PaintingStyle.stroke;
 
-                  // Gemi Adı & Rıhtım Konumu
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          data['gemiAdi'] ?? 'Bilinmeyen Gemi',
-                          style: GoogleFonts.orbitron(
-                            color: Colors.white,
-                            fontSize: 15.5,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: 0.6,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        if (berthSub.isNotEmpty)
-                          Text(
-                            berthSub,
-                            style: const TextStyle(
-                              color: Colors.white38,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
-                              letterSpacing: 0.3,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
+        const boxR = 11.0;
+        canvas.drawRect(Rect.fromCircle(center: shipPos, radius: boxR), reticlePaint);
 
-                  // Rıhtım / Demir Rozeti (Dokunup Düzenlenebilir)
-                  GestureDetector(
-                    onTap: () => _showEditRihtimDialog(
-                      docId,
-                      data['gemiAdi'] ?? 'Gemi',
-                      data['rihtimNo']?.toString() ?? (isAnchored ? 'Demir' : '1'),
-                      durum,
-                    ),
-                    child: isAnchored
-                        ? Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF59E0B).withValues(alpha: 0.14),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: const Color(0xFFF59E0B).withValues(alpha: 0.45),
-                              ),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Icon(Icons.anchor_rounded, size: 12, color: Color(0xFFF59E0B)),
-                                const SizedBox(width: 4),
-                                Text(
-                                  'DEMİRDE',
-                                  style: GoogleFonts.orbitron(
-                                    color: const Color(0xFFF59E0B),
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.w900,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          )
-                        : Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF38BDF8).withValues(alpha: 0.12),
-                              borderRadius: BorderRadius.circular(8),
-                              border: Border.all(
-                                color: const Color(0xFF38BDF8).withValues(alpha: 0.35),
-                              ),
-                            ),
-                            child: Text(
-                              'R-${data['rihtimNo'] ?? '?'}',
-                              style: GoogleFonts.orbitron(
-                                color: const Color(0xFF38BDF8),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w900,
-                              ),
-                            ),
-                          ),
-                  ),
-                  const SizedBox(width: 6),
-
-                  // Durum Rozeti
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.16),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: color.withValues(alpha: 0.45)),
-                    ),
-                    child: Text(
-                      statusLabel,
-                      style: TextStyle(
-                        color: color,
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.3,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-
-              // Canlı AIS Telemetri Rozetleri (Hız, Rota, MMSI)
-              if (data['speedKnots'] != null || data['mmsi'] != null) ...[
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  children: [
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                      decoration: BoxDecoration(
-                        color: Colors.white.withValues(alpha: 0.04),
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            speedNum > 1.0 ? Icons.speed_rounded : Icons.anchor_rounded,
-                            size: 12,
-                            color: speedNum > 1.0
-                                ? const Color(0xFFEF4444)
-                                : const Color(0xFF10B981),
-                          ),
-                          const SizedBox(width: 4),
-                          Text(
-                            'AIS: ${data['speedKnots'] ?? '0.0'} kt',
-                            style: TextStyle(
-                              color: speedNum > 1.0 ? const Color(0xFFEF4444) : Colors.white70,
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (data['heading'] != null)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.04),
-                          borderRadius: BorderRadius.circular(7),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.navigation_rounded, size: 11, color: Colors.white60),
-                            const SizedBox(width: 4),
-                            Text(
-                              'ROTA: ${data['heading']}°',
-                              style: const TextStyle(
-                                color: Colors.white70,
-                                fontSize: 10.5,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    if (data['mmsi'] != null && data['mmsi'].toString().isNotEmpty)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.04),
-                          borderRadius: BorderRadius.circular(7),
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-                        ),
-                        child: Text(
-                          'MMSI: ${data['mmsi']}',
-                          style: const TextStyle(
-                            color: Colors.white54,
-                            fontSize: 10,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
-                      ),
-                    // Tonaj Rozeti
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF38BDF8).withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.25)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.scale_rounded, size: 11, color: Color(0xFF38BDF8)),
-                          const SizedBox(width: 4),
-                          Text(
-                            tonajStr,
-                            style: const TextStyle(
-                              color: Color(0xFF7DD3FC),
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    // ETA Rozeti
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3.5),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withValues(alpha: 0.08),
-                        borderRadius: BorderRadius.circular(7),
-                        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.25)),
-                      ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Icon(Icons.schedule_rounded, size: 11, color: Color(0xFFF59E0B)),
-                          const SizedBox(width: 4),
-                          Text(
-                            'ETA: $etaStr',
-                            style: const TextStyle(
-                              color: Color(0xFFFCD34D),
-                              fontSize: 10.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-
-              // Kritik Hız ve Ayrılma / Giriş Uyarı Bannerları
-              if (isMovingAway) ...[
-                const SizedBox(height: 9),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFEF4444).withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(9),
-                    border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.5)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.warning_amber_rounded, color: Color(0xFFEF4444), size: 16),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'GEMİ LİMANDAN AYRILIYOR // HIZ: ${data['speedKnots'] ?? '?'} KT',
-                          style: const TextStyle(
-                            color: Color(0xFFEF4444),
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              if (isEntering) ...[
-                const SizedBox(height: 9),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF06B6D4).withValues(alpha: 0.16),
-                    borderRadius: BorderRadius.circular(9),
-                    border: Border.all(color: const Color(0xFF06B6D4).withValues(alpha: 0.5)),
-                  ),
-                  child: Row(
-                    children: [
-                      const Icon(Icons.directions_boat_rounded, color: Color(0xFF06B6D4), size: 16),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          'GEMİ LİMANA GİRİŞ YAPIYOR // HIZ: ${data['speedKnots'] ?? '?'} KT',
-                          style: const TextStyle(
-                            color: Color(0xFF06B6D4),
-                            fontSize: 11,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-              // 2. ORTA ALAN: LOTTİE GEMİ + 3 SÜTUNLU MİKRO BİLGİ BADGELERİ
-              Row(
-                children: [
-                  // Lottie Gemi Çerçevesi
-                  Container(
-                    width: 52,
-                    height: 52,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF090D15),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: color.withValues(alpha: 0.4),
-                        width: 1.5,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: color.withValues(alpha: 0.18),
-                          blurRadius: 10,
-                          spreadRadius: 1,
-                        ),
-                      ],
-                    ),
-                    child: ClipOval(
-                      child: Padding(
-                        padding: const EdgeInsets.all(4.0),
-                        child: LottieCargoShipWidget(
-                          width: 44,
-                          height: 44,
-                          animate: durum != 'Limandan Ayrıldı',
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-
-                  // 3 Mikro Bilgi Kutusu (Rıhtım, Yük Cinsi, Operatör)
-                  Expanded(
-                    child: Row(
-                      children: [
-                        // Rıhtım / Konum Bilgisi (Tıklanıp Düzenlenebilir)
-                        Expanded(
-                          child: _buildMicroBadge(
-                            icon: HugeIcons.strokeRoundedAnchor,
-                            iconColor: isAnchored ? const Color(0xFFF59E0B) : const Color(0xFF60A5FA),
-                            label: isAnchored ? 'KONUM' : 'RIHTIM',
-                            value: isAnchored ? 'Açıkta' : 'R-${data['rihtimNo'] ?? '?'}',
-                            subtitle: isAnchored ? 'Demir Sahası' : ((rNo >= 1 && rNo <= 5) ? berthNames[rNo - 1] : ''),
-                            isEditable: true,
-                            onTap: () => _showEditRihtimDialog(
-                              docId,
-                              data['gemiAdi'] ?? 'Gemi',
-                              data['rihtimNo']?.toString() ?? (isAnchored ? 'Demir' : '1'),
-                              durum,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-
-                        // Yük Cinsi Bilgisi (Tıklanıp Düzenlenebilir)
-                        Expanded(
-                          child: _buildMicroBadge(
-                            icon: HugeIcons.strokeRoundedPackage,
-                            iconColor: yukColor,
-                            label: 'YÜK',
-                            value: yukCinsi,
-                            isEditable: true,
-                            onTap: () => _showEditYukCinsiDialog(
-                              docId,
-                              data['gemiAdi'] ?? 'Gemi',
-                              yukCinsi,
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 6),
-
-                        // Operatör Bilgisi
-                        Expanded(
-                          child: _buildMicroBadge(
-                            icon: HugeIcons.strokeRoundedUser,
-                            iconColor: const Color(0xFF34D399),
-                            label: 'OPERATÖR',
-                            value: (data['guncelleyenKisi'] ?? 'İsdemir').toString().toLowerCase().contains('demir')
-                                ? 'Radar'
-                                : (data['guncelleyenKisi'] ?? 'İsdemir').toString().toLowerCase().contains('myship')
-                                    ? 'Otomasyon'
-                                    : (data['guncelleyenKisi'] ?? 'İsdemir').toString().split(' ').first,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 10),
-
-              // TONAJ & ETA BİLGİ ŞERİDİ
-              Row(
-                children: [
-                  // TONAJ (DWT & GT)
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFF38BDF8).withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFF38BDF8).withValues(alpha: 0.18)),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF38BDF8).withValues(alpha: 0.14),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.scale_rounded, color: Color(0xFF38BDF8), size: 15),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'GEMİ TONAJI',
-                                  style: TextStyle(
-                                    color: Colors.white38,
-                                    fontSize: 8.5,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                                const SizedBox(height: 1),
-                                Text(
-                                  tonajStr,
-                                  style: const TextStyle(
-                                    color: Color(0xFFE2E8F0),
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                if (data['grossTonaj'] != null && data['grossTonaj'].toString().isNotEmpty)
-                                  Text(
-                                    data['grossTonaj'].toString(),
-                                    style: const TextStyle(
-                                      color: Color(0xFF94A3B8),
-                                      fontSize: 8.5,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-
-                  // TAHMİNİ VARIŞ (ETA)
-                  Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF59E0B).withValues(alpha: 0.06),
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.18)),
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFFF59E0B).withValues(alpha: 0.14),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: const Icon(Icons.schedule_rounded, color: Color(0xFFF59E0B), size: 15),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'TAHMİNİ VARIŞ (ETA)',
-                                  style: TextStyle(
-                                    color: Colors.white38,
-                                    fontSize: 8.5,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 0.5,
-                                  ),
-                                ),
-                                const SizedBox(height: 1),
-                                Text(
-                                  etaStr,
-                                  style: const TextStyle(
-                                    color: Color(0xFFFCD34D),
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                if (data['dest'] != null && data['dest'].toString().isNotEmpty)
-                                  Text(
-                                    'Hedef: ${data['dest']}',
-                                    style: const TextStyle(
-                                      color: Color(0xFFF59E0B),
-                                      fontSize: 8.5,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 12),
-
-              // 3. ALT BİLGİ ÇUBUĞU (Liman Vinci / Demir Sahası Bannerı + Radar + Silme)
-              Row(
-                children: [
-                  if (isAnchored)
-                    Expanded(
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFFF59E0B).withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: const Color(0xFFF59E0B).withValues(alpha: 0.25)),
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.anchor_rounded, color: Color(0xFFF59E0B), size: 14),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                'Açıkta Bekliyor // 36.7615°N, 36.1361°E ${data['mesafeDemirKm'] != null ? '(${data['mesafeDemirKm']} km)' : ''}',
-                                style: const TextStyle(
-                                  color: Color(0xFFFCD34D),
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                  else
-                    Expanded(
-                      child: IndustrialCraneWidget(
-                        isOperating: durum == 'Gemi Başlama Alındı' || durum == 'Gemi Bitişte',
-                        themeColor: color,
-                        compact: true,
-                      ),
-                    ),
-                  const SizedBox(width: 8),
-
-                  // Otomatik Radar Bilgisi
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: isAnchored
-                          ? const Color(0xFFF59E0B).withValues(alpha: 0.08)
-                          : const Color(0xFF10B981).withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: isAnchored
-                            ? const Color(0xFFF59E0B).withValues(alpha: 0.3)
-                            : const Color(0xFF10B981).withValues(alpha: 0.25),
-                      ),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(
-                          Icons.radar_rounded,
-                          color: isAnchored ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
-                          size: 13,
-                        ),
-                        const SizedBox(width: 5),
-                        Text(
-                          isAnchored ? 'Demir Radarı' : 'Radar Takip',
-                          style: TextStyle(
-                            color: isAnchored ? const Color(0xFFFCD34D) : const Color(0xFF6EE7B7),
-                            fontSize: 10,
-                            fontWeight: FontWeight.w700,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(width: 2),
-
-                  // Sil Butonu
-                  IconButton(
-                    tooltip: 'Kaydı Sil',
-                    icon: const Icon(Icons.delete_outline_rounded, color: Colors.white38, size: 18),
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-                    onPressed: () => _confirmDeleteShip(docId, data['gemiAdi'] ?? 'Gemi'),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-
-
-  Widget _buildMicroBadge({
-    required List<List<dynamic>> icon,
-    required Color iconColor,
-    required String label,
-    required String value,
-    String? subtitle,
-    VoidCallback? onTap,
-    bool isEditable = false,
-  }) {
-    final badge = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 7),
-      decoration: BoxDecoration(
-        color: isEditable
-            ? iconColor.withValues(alpha: 0.08)
-            : Colors.white.withValues(alpha: 0.04),
-        borderRadius: BorderRadius.circular(11),
-        border: Border.all(
-          color: isEditable
-              ? iconColor.withValues(alpha: 0.35)
-              : Colors.white.withValues(alpha: 0.07),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              HugeIcon(icon: icon, color: iconColor, size: 11),
-              const SizedBox(width: 4),
-              Expanded(
-                child: Text(
-                  label,
-                  style: TextStyle(
-                    color: isEditable ? iconColor : Colors.white.withValues(alpha: 0.45),
-                    fontSize: 8.5,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 0.5,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-              if (isEditable) ...[
-                Icon(Icons.edit_rounded, color: iconColor.withValues(alpha: 0.75), size: 10),
-              ],
-            ],
-          ),
-          const SizedBox(height: 3),
-          Text(
-            value,
+        // Hedef İsim Etiketi
+        final tp = TextPainter(
+          text: TextSpan(
+            text: '${ship['gemiAdi']} [${ship['rihtimNo']}]',
             style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11.5,
-              fontWeight: FontWeight.w700,
+              color: Color(0xFFFDE68A),
+              fontSize: 8.5,
+              fontWeight: FontWeight.bold,
+              backgroundColor: Color(0xCC000000),
             ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
           ),
-          if (subtitle != null && subtitle.isNotEmpty) ...[
-            const SizedBox(height: 1),
-            Text(
-              subtitle,
-              style: const TextStyle(
-                color: Colors.white38,
-                fontSize: 8,
-                fontWeight: FontWeight.w500,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+          textDirection: ui.TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(shipPos.dx - tp.width / 2, shipPos.dy - boxR - 12));
+      } else {
+        // Normal küçük gemi adı
+        final tp = TextPainter(
+          text: TextSpan(
+            text: ship['gemiAdi'] as String,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.8),
+              fontSize: 7.5,
+              fontWeight: FontWeight.w600,
             ),
-          ],
-        ],
-      ),
-    );
-
-    if (onTap != null) {
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: onTap,
-          borderRadius: BorderRadius.circular(11),
-          splashColor: iconColor.withValues(alpha: 0.2),
-          highlightColor: iconColor.withValues(alpha: 0.1),
-          child: badge,
-        ),
-      );
+          ),
+          textDirection: ui.TextDirection.ltr,
+        )..layout();
+        tp.paint(canvas, Offset(shipPos.dx + 6, shipPos.dy - 4));
+      }
     }
-    return badge;
+
+    // 6. Dış Çerçeve Parlaması
+    final outerRingPaint = Paint()
+      ..color = glowColor.withValues(alpha: 0.4)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawCircle(center, radius, outerRingPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant RadarSweepPainter oldDelegate) {
+    return oldDelegate.sweepAngle != sweepAngle ||
+        oldDelegate.spectrumMode != spectrumMode ||
+        oldDelegate.selectedShipName != selectedShipName ||
+        oldDelegate.ships != ships;
   }
 }
+

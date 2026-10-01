@@ -10,6 +10,7 @@ import 'models/user_model.dart';
 import 'utils/push_service.dart';
 import 'widgets/tactical_radio_call_overlay.dart';
 import 'package:onesignal_flutter/onesignal_flutter.dart';
+import 'package:audioplayers/audioplayers.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -64,8 +65,11 @@ void main() async {
     }
 
     if (isTelsizRelated) {
+      if (TelsizScreen.isTelsizActive) {
+        return; // Telsiz ekranındayken üstten çıkan RX çağrı bildirimini asla gösterme!
+      }
       final navContext = globalNavigatorKey.currentContext;
-      if (navContext != null) {
+      if (navContext != null && navContext.mounted) {
         final ch = data['channel']?.toString() ?? '1';
         final inviter = data['inviterName']?.toString() ??
             (title.replaceAll(RegExp(r'\[.*?\]'), '').replaceAll('📻', '').trim().isNotEmpty
@@ -85,6 +89,34 @@ void main() async {
           channelName: chInfo['name']!,
           freq: chInfo['freq']!,
         );
+      }
+    }
+
+    // ── 🌦️ HAVA DURUMU ATMOSFERİK SES MOTORU (Yağmur, Rüzgar, Şimşek, Dalga) ──
+    final weatherType = (data['weather_type'] ?? data['sound'])?.toString().toLowerCase() ?? '';
+    final isWeather = data['type'] == 'weather' ||
+        data['type'] == 'marine_wave' ||
+        title.contains('Yağış') ||
+        title.contains('Yağmur') ||
+        title.contains('Fırtına') ||
+        title.contains('Şimşek') ||
+        title.contains('Rüzgar') ||
+        title.contains('Dalga');
+
+    if (isWeather) {
+      try {
+        final player = AudioPlayer();
+        if (weatherType == 'rain' || title.contains('Yağmur') || title.contains('Yağış')) {
+          player.play(AssetSource('audio/rain.wav'));
+        } else if (weatherType == 'storm' || weatherType == 'thunder' || title.contains('Fırtına') || title.contains('Şimşek')) {
+          player.play(AssetSource('audio/thunder.wav'));
+        } else if (weatherType == 'wind' || title.contains('Rüzgar')) {
+          player.play(AssetSource('audio/wind.wav'));
+        } else if (weatherType == 'wave' || weatherType == 'sea_ambient' || title.contains('Dalga')) {
+          player.play(AssetSource('audio/sea_ambient.wav'));
+        }
+      } catch (e) {
+        debugPrint('Hava bildirim sesi hatası: $e');
       }
     }
 

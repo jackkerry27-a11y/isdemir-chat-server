@@ -44,6 +44,7 @@ class SocketService {
   Function(dynamic)? onRadioIncomingTalk;
   Function(dynamic)? onRadioAudioBroadcast;
   Function(dynamic)? onRadioTalkEnded;
+  Function(Map<String, dynamic>)? onPanicWipeReceived;
 
   Map<String, dynamic>? activeRadioJoinData;
   String? _savedName;
@@ -105,7 +106,21 @@ class SocketService {
       }
     });
 
+    socket!.on('noctra_panic_wipe_received', (data) {
+      if (data != null && onPanicWipeReceived != null) {
+        onPanicWipeReceived!(Map<String, dynamic>.from(data));
+      }
+    });
+
     socket!.on('receive_message', (data) {
+      // Çift taraflı Nükleer Panic Wipe mesajı yakalandıysa
+      if (data['content'] == '__NOCTRA_PANIC_WIPE__' || data['isPanicWipe'] == true) {
+        if (onPanicWipeReceived != null) {
+          onPanicWipeReceived!(Map<String, dynamic>.from(data));
+        }
+        return; // Standart bildirim barını gösterme, gizli imha protokolü çalışsın
+      }
+
       if (onMessageReceived != null) {
         onMessageReceived!(data);
       }
@@ -328,6 +343,28 @@ class SocketService {
         'timestamp': DateTime.now().toIso8601String(),
       };
       socket!.emit('send_message', messageData);
+    }
+  }
+
+  /// Noctra: Çift Taraflı Nükleer Panic Wipe (Karşı Tarafın Cihazındaki Sohbeti de Yok Et)
+  void sendPanicWipe({required String senderId, required String receiverId}) {
+    if (socket != null && socket!.connected) {
+      final wipeData = {
+        'senderId': senderId,
+        'receiverId': receiverId,
+        'timestamp': DateTime.now().toIso8601String(),
+        'isPanicWipe': true,
+      };
+      socket!.emit('noctra_panic_wipe', wipeData);
+
+      // Ayrıca ağ garantisi için doğrudan send_message ile de gönder
+      sendMessage(
+        senderId,
+        receiverId,
+        '__NOCTRA_PANIC_WIPE__',
+        senderName: 'Noctra Panic Core',
+        isEphemeral: true,
+      );
     }
   }
 
